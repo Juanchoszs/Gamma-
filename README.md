@@ -286,3 +286,5 @@ inchangés. Signaler un bug ou proposer une amélioration aide tout autant.
   courtes mais n'est pas nulle — les indices SPX et NDX, eux, n'ont pas ce
   biais. Ils n'ont par ailleurs pas de future associé, donc le sélecteur
   Indice/Futures y est inactif.
+#   G a m m a -  
+ 
