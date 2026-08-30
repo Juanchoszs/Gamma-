@@ -1,10 +1,4 @@
-"""Boucle d'ingestion : pull flux toutes les N secondes, snapshot complet
-toutes les M secondes, pendant les heures de marché ET.
-
-L'état courant (dernière chaîne enrichie + synthèse par sous-jacent) est
-gardé en mémoire dans `STATE`, protégé par un lock — le dashboard Dash lit
-cet état, la persistance Parquet assure l'historique.
-"""
+"""Live ingestion loop for CBOE and native futures data."""
 from __future__ import annotations
 
 import logging
@@ -71,9 +65,6 @@ def pull_symbol(symbol: str, persist_snapshot: bool) -> None:
         prev = st.enriched
         prev_feed_ts = st.last_feed_ts
 
-    # Flux delta : uniquement sur les cibles analysées, et seulement si le feed
-    # a réellement avancé depuis le dernier pull (sinon Δvolume = bruit nul).
-    # Sur un constituant, seuls comptent ses murs et son spot.
     if (u.role == "target" and prev is not None
             and prev_feed_ts != snap.feed_timestamp):
         flow = metrics.flow_delta(prev, enriched, snap.spot)
@@ -81,7 +72,14 @@ def pull_symbol(symbol: str, persist_snapshot: bool) -> None:
         store.append_daily("flows", symbol, flow, now)
 
     if persist_snapshot:
-        store.save_snapshot(symbol, enriched, now)
+        store.save_snapshot(
+            symbol, enriched, now,
+            source="cboe",
+            snapshot_type="LIVE",
+            data_quality="VALID",
+            market_state="LIVE",
+            schema_version=1,
+        )
         store.append_history(summary.as_row())
 
     with STATE.lock:
@@ -99,11 +97,7 @@ def pull_symbol(symbol: str, persist_snapshot: bool) -> None:
 
 
 class _Cadence:
-    """Déclenche une action toutes les N itérations de la boucle de pull.
-
-    `interval_s` est ramené au nombre d'itérations correspondant : la boucle
-    tourne à `flow_interval_s`, tout le reste s'exprime en multiples.
-    """
+    """Trigger an action every N loop iterations."""
 
     def __init__(self, interval_s: int | None = None) -> None:
         self.count = 0
@@ -117,22 +111,17 @@ class _Cadence:
 
 
 _CADENCE = _Cadence()
-# Les constituants suivent leur propre horloge : leurs murs reposent sur l'open
-# interest, publié une fois par jour, donc les puller au rythme des cibles
-# n'apporterait rien et quadruplerait la charge.
+# Constituents follow their own cadence; they rely on daily open interest and do not need the same resolution as targets.
 _CONSTITUENT_CADENCE = _Cadence(SETTINGS.constituent_interval_s)
 _CONSTITUENT_SNAPSHOT = _Cadence(SETTINGS.constituent_snapshot_interval_s)
 
 
 def pull_vix() -> None:
-    """VIX comme donnée de confluence (get_market_context, MCP) : pas un
-    sous-jacent analysé, juste un spot horodaté — cf. store.append_index_spot.
-    Cadence alignée sur les constituants (~10 min), un signal de fond n'a pas
-    besoin d'une résolution à la minute."""
+    """Fetch the VIX spot used as market context and MCP context."""
     try:
         spot, ts = fetch_index_spot("_VIX")
         store.append_index_spot("vix", {"timestamp": ts, "vix": spot})
-    except Exception:  # noqa: BLE001 — un échec VIX ne doit rien casser d'autre
+    except Exception:  # noqa: BLE001
         log.exception("Échec pull VIX")
 
 
@@ -148,28 +137,22 @@ def pull_all(force: bool = False) -> None:
         if not u.enabled:
             continue
         if u.role == "context":
-            # pas une chaîne d'options — pullé séparément (pull_vix), listé
-            # dans UNDERLYINGS uniquement pour l'abonnement dxFeed live
             continue
         if u.source == "futopt":
-            # collecte native séparée (pull_native_options) : une chaîne
-            # coûte ~90 s, incompatible avec cette boucle à 60 s
             continue
         is_constituent = u.role == "constituent"
         if is_constituent and not (due or force):
             continue
         try:
-            pull_symbol(key, persist_snapshot=(persist_constituent if is_constituent
-                                               else persist))
-        except Exception as e:  # noqa: BLE001 — la boucle doit survivre
+            pull_symbol(key, persist_snapshot=(persist_constituent if is_constituent else persist))
+        except Exception as e:  # noqa: BLE001
             log.exception("Échec pull %s", key)
             with STATE.lock:
                 STATE.last_error = f"{key}: {e}"
 
 
 def push_data_repo() -> None:
-    """Commit + push quotidien du repo data/ (historique + flux) après la
-    clôture — backup hors-machine des données non reconstituables."""
+    """Commit and push the data repository after market close if configured."""
     import subprocess
 
     repo = SETTINGS.data_dir
@@ -180,11 +163,11 @@ def push_data_repo() -> None:
         subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, capture_output=True)
         diff = subprocess.run(["git", "-C", str(repo), "diff", "--cached", "--quiet"])
         if diff.returncode == 0:
-            return  # rien de nouveau
+            return
         subprocess.run(["git", "-C", str(repo), "commit", "-m", f"data {day}"],
                        check=True, capture_output=True)
         has_remote = subprocess.run(["git", "-C", str(repo), "remote"],
-                                    capture_output=True, text=True).stdout.strip()
+                                   capture_output=True, text=True).stdout.strip()
         if has_remote:
             subprocess.run(["git", "-C", str(repo), "push"], check=True,
                            capture_output=True, timeout=120)
@@ -197,31 +180,20 @@ def push_data_repo() -> None:
 
 def build_native_summary(code: str, df: pd.DataFrame,
                           now_et: datetime | None = None) -> tuple[ChainSnapshot, SummaryMetrics]:
-    """(ChainSnapshot, SummaryMetrics) à partir d'une chaîne native (futopt).
-
-    Fonction pure : ne touche ni STATE ni le disque, donc testable sans
-    connexion. `df` doit porter les colonnes de sortie de
-    `futopt.enrich_native` (strike, type, expiry, gex, open_interest, volume,
-    spot…) — mêmes colonnes que `metrics.enrich`, d'où la réutilisation directe
-    des fonctions de `metrics` plutôt qu'une resynthèse spécifique.
-
-    `source="dxfeed"` sur la ligne d'historique : ces données viennent du
-    courtier (open interest et IV CME), non redistribuables — même
-    traitement que les bougies de prix (cf. gex/rtquote.py).
-    """
+    """Build a summary for a native future-options chain."""
     now_et = now_et or datetime.now(ET)
     spot = float(df["spot"].iloc[0])
     ratios = metrics.put_call_ratios(df)
     today = now_et.date()
     snap = ChainSnapshot(
-        symbol=code, spot=spot,
-        # naïf en ET, comme le feed CBOE : build_cards fait un .replace(tzinfo=ET)
+        symbol=code,
+        spot=spot,
         feed_timestamp=now_et.replace(tzinfo=None),
-        fetched_at=datetime.now(UTC), options=df,
+        fetched_at=datetime.now(UTC),
+        options=df,
     )
     age_seconds = (now_et - snap.fetched_at).total_seconds()
 
-    # Compute net_dex handling NaN values (missing DEX data)
     dex_series = df["dex"] if "dex" in df.columns else pd.Series(dtype=float)
     if dex_series.notna().any():
         net_dex = float(np.nansum(dex_series))
@@ -229,34 +201,28 @@ def build_native_summary(code: str, df: pd.DataFrame,
         net_dex = None
 
     summary = SummaryMetrics(
-        timestamp=snap.feed_timestamp, symbol=code, spot=spot,
+        timestamp=snap.feed_timestamp,
+        symbol=code,
+        spot=spot,
         net_gex=float(df["gex"].sum()),
         zero_gamma=metrics.zero_gamma(df, spot),
-        pc_oi=ratios["pc_oi"], pc_volume=ratios["pc_volume"],
+        pc_oi=ratios["pc_oi"],
+        pc_volume=ratios["pc_volume"],
         net_gex_0dte=float(df.loc[metrics.bucket_mask(df, "0DTE", today), "gex"].sum()),
-        # `futopt.enrich_native` calcule bien une colonne "dex" par contrat,
-        # mais elle n'était pas sommée ici : le champ retombait donc sur sa
-        # valeur par défaut (0.0) et NQ/ES affichaient un DEX net nul depuis
-        # toujours — un zéro qui ressemblait à une mesure alors que c'était un
-        # trou (constaté le 2026-07-29). Now properly handles NaN.
         net_dex=net_dex,
-        # pas de "basis" : ce sont déjà des options sur LE future, pas un
-        # indice à convertir vers un contrat qui lui serait associé
-        basis=None, source="dxfeed",
+        basis=None,
+        source="dxfeed",
         data_quality=DataQuality.VALID,
         age_seconds=age_seconds,
     )
     return snap, summary
 
 
-NATIVE_CACHE_FRESH_S = 300  # cf. pull_native_options : redémarrer perd STATE,
-# pas le disque — inutile de rejouer ~90-280 s de collecte dxFeed pour une
-# donnée qui a moins de 5 min.
+NATIVE_CACHE_FRESH_S = 300
 
 
 def _seed_native_state(code: str, df: pd.DataFrame, ts: datetime) -> SummaryMetrics:
-    """Construit (ChainSnapshot, SummaryMetrics) depuis `df`/`ts` et peuple
-    STATE — factorisé entre le chemin cache et le chemin collecte live."""
+    """Populate STATE from a cached or freshly fetched native snapshot."""
     snap, summary = build_native_summary(code, df, ts)
     st = STATE.get(code)
     with STATE.lock:
@@ -306,7 +272,14 @@ def pull_native_options() -> None:
             if df is None or df.empty:
                 continue
             now = datetime.now(ET)
-            store.save_snapshot(code, df, now)
+            store.save_snapshot(
+            code, df, now,
+            source="dxfeed",
+            snapshot_type="LIVE",
+            data_quality="VALID",
+            market_state="LIVE",
+            schema_version=1,
+        )
             summary = _seed_native_state(code, df, now)
             store.append_history(summary.as_row())
             log.info("%s (natif) pull ok — spot=%.2f netGEX=%.2f Bn zeroG=%s",
@@ -346,7 +319,14 @@ def pull_native_index() -> None:
                 continue
             now = datetime.now(ET)
             key = native_index_key(symbol)
-            store.save_snapshot(key, df, now)
+            store.save_snapshot(
+            key, df, now,
+            source="dxfeed",
+            snapshot_type="LIVE",
+            data_quality="VALID",
+            market_state="LIVE",
+            schema_version=1,
+        )
             summary = _seed_native_state(key, df, now)
             store.append_history(summary.as_row())
             log.info("%s (indice natif) pull ok — spot=%.2f netGEX=%.2f Bn zeroG=%s",

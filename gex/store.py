@@ -1,16 +1,11 @@
-"""Persistance Parquet à deux niveaux :
-
-- snapshots/ : chaîne complète enrichie, un fichier par pull "lent" (10 min)
-- flows/     : agrégats de flux delta par minute, un fichier par jour (réécrit)
-- history/   : métriques de synthèse par run (GEX net, zero gamma, P/C...)
-"""
+"""Parquet persistence with snapshots, flows, and summary history."""
 from __future__ import annotations
 
 import logging
 import os
 import threading
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -26,42 +21,35 @@ def _ensure(p: Path) -> Path:
     return p
 
 
+def _prepare_parquet_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Fastparquet is stricter than pyarrow for object columns containing Python dates."""
+    out = df.copy()
+    for column in out.columns:
+        series = out[column]
+        if not pd.api.types.is_object_dtype(series):
+            continue
+        values = series.dropna()
+        if values.empty:
+            continue
+        if all(isinstance(value, (date, datetime)) for value in values):
+            out[column] = pd.to_datetime(series, errors="coerce").dt.strftime("%Y-%m-%d")
+    return out
+
+
 def _write_atomic(df: pd.DataFrame, path: Path) -> None:
-    """Écrit via un fichier temporaire puis remplace.
-
-    Indispensable : le dashboard lit ces fichiers pendant que le scheduler les
-    réécrit. Sans atomicité, une lecture peut tomber sur un fichier
-    partiellement écrit — pyarrow lève alors « Invalid column metadata
-    (corrupt file?) » alors que les données sont saines. os.replace est
-    atomique sur un même système de fichiers.
-
-    ⚠️ Le nom du temporaire doit être UNIQUE par écriture, pas dérivé de la
-    seule destination. Avec un `.tmp` partagé, deux threads qui écrivent le
-    même fichier entrelacent leurs octets dans ce temporaire, puis `os.replace`
-    publie le résultat : la destination devient illisible alors que chaque
-    écriture était correcte prise isolément. C'est exactement ce qui a détruit
-    history/metrics.parquet le 2026-07-29 (« Page was smaller than expected »),
-    ce fichier ayant trois producteurs dans trois threads APScheduler
-    différents — pull_all, pull_native_options et pull_native_index.
-    """
+    """Write to a temporary file and replace the target atomically."""
+    safe_df = _prepare_parquet_df(df)
     tmp = path.with_suffix(f"{path.suffix}.{os.getpid()}.{threading.get_ident()}"
                            f".{uuid.uuid4().hex[:8]}.tmp")
     try:
-        df.to_parquet(tmp, index=False)
+        safe_df.to_parquet(tmp, index=False)
         os.replace(tmp, path)
     except BaseException:
-        # ne jamais laisser traîner un temporaire à moitié écrit
         tmp.unlink(missing_ok=True)
         raise
 
 
-# Un verrou par fichier : les fonctions append_* font un lire-modifier-écrire,
-# que deux threads peuvent entrelacer même avec des temporaires distincts —
-# le second relit alors un état d'avant l'écriture du premier et l'écrase.
-# Le temporaire unique évite la corruption, ce verrou évite la perte de lignes.
-# (Portée intra-processus : deux instances du dashboard sur le même dossier
-# resteraient exposées au dernier-qui-écrit-gagne, sans corruption pour
-# autant. Ce n'est pas un mode d'emploi prévu.)
+# One lock per file prevents interleaved read/write updates from different scheduler threads.
 _LOCKS: dict[Path, threading.Lock] = {}
 _LOCKS_GUARD = threading.Lock()
 
@@ -71,7 +59,43 @@ def _lock_for(path: Path) -> threading.Lock:
         return _LOCKS.setdefault(path, threading.Lock())
 
 
-def save_snapshot(symbol: str, df: pd.DataFrame, ts: datetime) -> Path:
+def save_snapshot(symbol: str, df: pd.DataFrame, ts: datetime,
+                  source: str = "cboe",
+                  snapshot_type: str = "LIVE",
+                  data_quality: str = "VALID",
+                  market_state: str = "LIVE",
+                  age_seconds: float | None = None,
+                  provider_timestamp: datetime | None = None,
+                  schema_version: int = 1) -> Path:
+    """Save enriched chain snapshot with metadata.
+
+    Args:
+        symbol: Underlying symbol
+        df: Enriched option chain DataFrame
+        ts: Snapshot timestamp (ET)
+        source: Data source (cboe, dxfeed, native_futures, native_index)
+        snapshot_type: Snapshot type (LIVE, MARKET_CLOSE, HISTORICAL, EXPIRED)
+        data_quality: Data quality (VALID, WARNING, STALE, EXPIRED, INVALID, MISSING)
+        market_state: Market state (LIVE, DELAYED, MARKET_CLOSED, HISTORICAL, NO_DATA)
+        age_seconds: Age of data in seconds
+        provider_timestamp: Original provider feed timestamp
+        schema_version: Schema version for forward compatibility
+
+    Returns:
+        Path to saved snapshot file
+    """
+    # Add metadata columns to the DataFrame
+    df = df.copy()
+    df["_snapshot_meta_symbol"] = symbol
+    df["_snapshot_meta_captured_at"] = ts
+    df["_snapshot_meta_source"] = source
+    df["_snapshot_meta_type"] = snapshot_type
+    df["_snapshot_meta_quality"] = data_quality
+    df["_snapshot_meta_schema_version"] = schema_version
+    df["_snapshot_meta_market_state"] = market_state
+    df["_snapshot_meta_age_seconds"] = age_seconds
+    df["_snapshot_meta_provider_ts"] = provider_timestamp
+
     path = _ensure(
         SETTINGS.data_dir / "snapshots" / symbol / ts.strftime("%Y-%m-%d") / f"{ts:%H%M%S}.parquet"
     )

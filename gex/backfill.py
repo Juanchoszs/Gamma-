@@ -1,23 +1,22 @@
-"""Backfill historique depuis Databento OPRA (dataset OPRA.PILLAR).
+"""Historical backfill from Databento OPRA (OPRA.PILLAR dataset).
 
-Remplit :
-- data/history/metrics.parquet : une ligne par jour et par sous-jacent
-  (GEX net, zero gamma, P/C) — schémas definition + statistics + ohlcv-1d
-- data/flows/{SYM}/{jour}.parquet : flux delta par minute — schéma ohlcv-1m
+Populates:
+- data/history/metrics.parquet: one row per day and underlying (net GEX, zero
+  gamma, P/C) from definition, statistics, and ohlcv-1d schemas
+- data/flows/{SYM}/{day}.parquet: per-minute delta flow from ohlcv-1m
 
-Approximations documentées :
-- IV retrouvée par inversion Black-Scholes sur le close quotidien.
-- Spot quotidien dérivé par parité call-put sur les paires liquides
-  (S = C - P + K·e^(-rT)), pas de source externe.
-- Pour le flux intraday, le delta par contrat est celui du jour (IV et spot
-  quotidiens) — pas recalculé minute par minute.
+Documented approximations:
+- IV is recovered by inverting Black-Scholes on the daily close.
+- Daily spot is derived from put-call parity on liquid pairs
+  (S = C - P + K·e^(-rT)), with no external spot source.
+- Intraday contract delta uses the day's IV and spot; it is not recalculated
+  minute by minute.
 
-Sécurités de facturation :
-- devis metadata (gratuit) avant tout téléchargement, abandon si > --max-cost
-- fichiers DBN bruts conservés dans data/databento/ : un re-run ne
-  retélécharge pas ce qui existe déjà (idempotent).
+Billing safeguards:
+- Request a free metadata quote before downloading; abort if > --max-cost.
+- Keep raw DBN files in data/databento/; reruns do not redownload existing files.
 
-Usage : python -m gex.backfill [--daily-days 31] [--intraday-days 7]
+Usage: python -m gex.backfill [--daily-days 31] [--intraday-days 7]
         [--max-cost 40] [--dry-run]
 """
 from __future__ import annotations
@@ -45,13 +44,13 @@ PARENTS = ["SPX.OPT", "SPXW.OPT", "NDX.OPT", "NDXP.OPT"]
 ROOT_TO_SYMBOL = {"SPX": "SPX", "SPXW": "SPX", "NDX": "NDX", "NDXP": "NDX"}
 RAW_DIR_NAME = "databento"
 
-# Databento signale la borne réellement disponible dans ses erreurs 422.
+# Databento reports the actually available bound in its 422 errors.
 _AVAIL_RE = re.compile(r"available up to '([^']+)'")
 
 
 def _avail_end_from_error(e) -> str | None:
-    """Extrait la borne de disponibilité d'une erreur data_end_after_available_end,
-    reformatée en ISO 8601 avec 'T' (un espace se ferait mutiler dans l'URL)."""
+    """Extract the available bound from a data_end_after_available_end error,
+    reformatted as ISO 8601 with 'T' (a space would be mangled in the URL)."""
     m = _AVAIL_RE.search(str(e))
     return pd.Timestamp(m.group(1)).isoformat() if m else None
 
@@ -82,11 +81,11 @@ def _raw_path(schema: str, start: date, end: date) -> Path:
 
 
 def download(client, schema: str, start: date, end: date, query_end=None) -> Path:
-    """Télécharge un schéma vers un fichier DBN local (skip si déjà présent).
+    """Download a schema to a local DBN file (skip if already present).
 
-    `end` sert au nommage/cache du fichier ; `query_end` (si fourni) est la
-    borne réellement envoyée à l'API — utile pour caler sur la disponibilité
-    du dataset sans changer le nom du cache.
+    `end` names and caches the file; optional `query_end` is the bound actually
+    sent to the API, allowing alignment with dataset availability without
+    changing the cache name.
     """
     path = _raw_path(schema, start, end)
     if path.exists():
@@ -104,7 +103,7 @@ def download(client, schema: str, start: date, end: date, query_end=None) -> Pat
             )
             break
         except BentoClientError as e:
-            # borne encore trop tardive pour ce schéma précis : recale une fois
+            # Bound is still too late for this schema; adjust it once.
             avail = _avail_end_from_error(e)
             if avail is None or attempt == 3:
                 raise
@@ -149,20 +148,20 @@ def load_open_interest(path: Path) -> pd.DataFrame:
     from databento_dbn import StatType
     df = _to_df(path).reset_index()
     df = df[df["stat_type"] == int(StatType.OPEN_INTEREST)]
-    # publication ~10:30 UTC le matin du jour de bourse : la date UTC est la bonne
+    # Published around 10:30 UTC on the trading morning; the UTC date is correct.
     day = pd.to_datetime(df["ts_event"], utc=True).dt.date
     out = pd.DataFrame(
         {"day": day, "instrument_id": df["instrument_id"],
          "open_interest": df["quantity"].astype(float)}
     )
-    # dernière publication du jour par contrat
+    # Keep the last publication of the day for each contract.
     return out.groupby(["day", "instrument_id"], as_index=False).last()
 
 
 def load_eod(path: Path) -> pd.DataFrame:
     df = _to_df(path).reset_index()
-    # ts_event = 00:00 UTC du jour de bourse (ouverture de la barre) :
-    # la date UTC est le jour de bourse, ne PAS convertir en ET (décale d'un jour)
+    # ts_event is 00:00 UTC on the trading day (bar open). Keep the UTC date;
+    # converting to ET would shift it by one day.
     day = pd.to_datetime(df["ts_event"], utc=True).dt.date
     return pd.DataFrame(
         {"day": day, "instrument_id": df["instrument_id"],
@@ -172,8 +171,8 @@ def load_eod(path: Path) -> pd.DataFrame:
 
 # ------------------------------------------------------------------ quotidien
 
-# Clôtures quotidiennes officielles des indices — le spot par parité call-put
-# sur closes EOD est trop bruité (trades non synchrones, SPX AM vs SPXW PM).
+# Official daily index closes. Put-call parity on EOD option closes is too noisy
+# because trades are asynchronous (SPX AM versus SPXW PM).
 SPOT_SOURCES = {
     "SPX": ("https://cdn.cboe.com/api/global/us_indices/daily_prices/SPX_History.csv",
             "%m/%d/%Y", "DATE", "SPX"),
@@ -203,15 +202,15 @@ def _t_years(expiries: pd.Series, day: date) -> np.ndarray:
 
 
 def spot_from_parity(chain: pd.DataFrame, day: date) -> float | None:
-    """Spot par parité call-put : S = C - P + K·e^(-rT), médiane des paires
-    liquides sur l'expiration la plus proche à ≥ 5 jours."""
+    """Put-call parity spot S = C - P + K·e^(-rT), median of liquid pairs on
+    the nearest expiration at least five days away."""
     expiries = sorted(e for e in chain["expiry"].unique()
                       if (e - day).days >= 5)
     if not expiries:
         return None
     e = chain[chain["expiry"] == expiries[0]]
-    # doublons de strike possibles (racines SPX et SPXW sur la même échéance) :
-    # on garde par strike le contrat le plus traité
+    # Duplicate strikes can occur (SPX and SPXW roots on one expiry); keep the
+    # most-traded contract for each strike.
     e = e.sort_values("volume").drop_duplicates(["type", "strike"], keep="last")
     calls = e[e["type"] == "C"].set_index("strike")["close"]
     puts = e[e["type"] == "P"].set_index("strike")["close"]
@@ -224,8 +223,8 @@ def spot_from_parity(chain: pd.DataFrame, day: date) -> float | None:
     s = calls.loc[common].to_numpy() - puts.loc[common].to_numpy() \
         + common.to_numpy() * np.exp(-RISK_FREE_RATE * t)
     med = float(np.median(s))
-    # garde-fou : si les paires divergent (> 2 % de dispersion médiane),
-    # les closes sont incohérents, mieux vaut ignorer le jour
+    # Safeguard: if pairs diverge (>2% median dispersion), closes are
+    # inconsistent; skip the day.
     if np.median(np.abs(s - med)) / med > 0.02:
         return None
     return med
@@ -233,16 +232,15 @@ def spot_from_parity(chain: pd.DataFrame, day: date) -> float | None:
 
 def build_day(chain: pd.DataFrame, symbol: str, day: date,
               spot: float | None = None, persist_chain: bool = False) -> dict | None:
-    """Chaîne d'un jour (OI + close jointées) -> ligne d'historique.
+    """Convert a day's joined chain (OI + close) into a history row.
 
-    `persist_chain` enregistre en plus la chaîne reconstruite comme snapshot,
-    ce qui permet d'en recalculer les niveaux a posteriori (backtest). Sans
-    cela la reconstruction est jetée après le calcul des agrégats, et le
-    backtest se limite aux quelques séances collectées en direct.
+    `persist_chain` also saves the reconstructed chain as a snapshot, allowing
+    levels to be recalculated later (backtest). Otherwise the reconstruction is
+    discarded after aggregation and backtesting is limited to live sessions.
 
-    Horodatage à 16:00 : c'est bien la clôture que décrivent ces données —
-    l'open interest de règlement du jour, celui qui sera publié le lendemain
-    matin. Le dater autrement laisserait croire qu'il était connu plus tôt.
+    Timestamp at 16:00: these data describe the close, including the day's
+    settlement open interest published the following morning. Dating it earlier
+    would imply it was known sooner.
     """
     if spot is None:
         spot = spot_from_parity(chain, day)
@@ -271,8 +269,15 @@ def build_day(chain: pd.DataFrame, symbol: str, day: date,
     zg = metrics.zero_gamma(d, spot)
     if persist_chain:
         try:
-            store.save_snapshot(symbol, d, datetime.combine(day, time(16, 0)))
-        except Exception:  # noqa: BLE001 — l'historique prime sur le snapshot
+            store.save_snapshot(
+                symbol, d, datetime.combine(day, time(16, 0)),
+                source="databento",
+                snapshot_type="HISTORICAL",
+                data_quality="VALID",
+                market_state="HISTORICAL",
+                schema_version=1,
+            )
+        except Exception:  # noqa: BLE001 — history takes priority over snapshot
             log.exception("%s %s : échec d'écriture du snapshot", symbol, day)
     oi_c = d.loc[is_call, "open_interest"].sum()
     oi_p = d.loc[~is_call, "open_interest"].sum()
@@ -287,8 +292,7 @@ def build_day(chain: pd.DataFrame, symbol: str, day: date,
         "pc_oi": float(oi_p / oi_c) if oi_c else float("nan"),
         "pc_volume": float(v_p / v_c) if v_c else float("nan"),
         "net_gex_0dte": float(d.loc[d["expiry"] == day, "gex"].sum()),
-        # provenance : données payantes sous licence d'usage personnel,
-        # exclues de tout export partageable (voir gex/export.py)
+        # Paid, personal-use data; excluded from shareable exports.
         "source": "databento",
         "_deltas": d[["instrument_id", "delta_bs", "expiry"]],
         "_spot": spot,
@@ -313,7 +317,7 @@ def build_flows(minute_df: pd.DataFrame, deltas: pd.DataFrame, spot: float,
     grouped["flow_puts"] = m[m["delta_bs"] <= 0].groupby("minute")["signed"].sum() \
         .reindex(grouped.index, fill_value=0.0)
     grouped = grouped.reset_index().rename(columns={"minute": "timestamp"})
-    grouped["source"] = "databento"   # non redistribuable
+    grouped["source"] = "databento"   # not redistributable
     return grouped
 
 
@@ -321,19 +325,18 @@ def build_flows(minute_df: pd.DataFrame, deltas: pd.DataFrame, spot: float,
 
 def run(daily_days: int, intraday_days: int, max_cost: float, dry_run: bool,
         end: date | None = None, persist_chains: bool = True) -> None:
-    """`persist_chains` enregistre les chaînes reconstruites comme snapshots,
-    ce qui rend leurs niveaux rejouables (backtest). Coûte de l'espace disque,
-    rien de plus : les fichiers bruts sont déjà téléchargés."""
+    """Save reconstructed chains as snapshots when `persist_chains` is enabled,
+    making their levels replayable for backtests. This uses disk space only;
+    raw files have already been downloaded."""
     client = _client()
     end = end or (date.today() - timedelta(days=1))
     daily_start = end - timedelta(days=daily_days)
     intra_start = end - timedelta(days=intraday_days)
 
-    # Cale la borne de fin sur la disponibilité RÉELLE : get_dataset_range est
-    # en retard sur la publication du jour le plus récent, donc on sonde via un
-    # devis (gratuit) — sur dépassement, Databento renvoie la borne réelle dans
-    # le message d'erreur, qu'on reformate en ISO (le 'T' évite que l'espace
-    # soit mutilé dans l'URL). Robuste pour les runs quotidiens et la tâche 10h.
+    # Align the end bound with REAL availability: get_dataset_range lags the
+    # latest publication, so probe with a free quote. On overflow, Databento
+    # returns the real bound in the error; reformat it as ISO so the 'T' avoids
+    # mangling the URL space. This is robust for daily runs and the 10:00 job.
     from databento.common.error import BentoClientError
 
     query_end = end
@@ -396,7 +399,7 @@ def run(daily_days: int, intraday_days: int, max_cost: float, dry_run: bool,
     new_rows = []
     spots = load_spots()
     for (symbol, day), chain in chains.groupby(["symbol", "day"]):
-        if day.weekday() >= 5:  # artefacts de publication le week-end
+        if day.weekday() >= 5:  # weekend publication artifacts
             continue
         res = build_day(chain, symbol, day, spots.get(symbol, {}).get(day),
                         persist_chain=persist_chains)
@@ -432,7 +435,7 @@ def run(daily_days: int, intraday_days: int, max_cost: float, dry_run: bool,
             continue
         out_path = SETTINGS.data_dir / "flows" / symbol / f"{day}.parquet"
         if out_path.exists():
-            continue  # ne pas écraser les jours collectés en live
+            continue  # do not overwrite days collected live
         flows = build_flows(mday, res["_deltas"], res["_spot"], symbol, day)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         flows.to_parquet(out_path, index=False)
@@ -442,7 +445,7 @@ def run(daily_days: int, intraday_days: int, max_cost: float, dry_run: bool,
 
 def main() -> None:
     from .logsetup import setup_logging
-    setup_logging()  # console + logs/gex.log
+    setup_logging()
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--daily-days", type=int, default=31)
     ap.add_argument("--intraday-days", type=int, default=7)

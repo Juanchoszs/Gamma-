@@ -17,7 +17,7 @@ import pandas as pd
 from .quality import DataQuality
 from .market_state import MarketDataState
 
-# Re-export for convenience
+# Re-export domain types for convenience.
 __all__ = [
     "DataQuality",
     "MarketDataState",
