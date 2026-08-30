@@ -16,6 +16,7 @@ from pathlib import Path
 import pandas as pd
 
 from .config import SETTINGS
+from .metrics import ET
 
 log = logging.getLogger(__name__)
 
@@ -147,7 +148,7 @@ def previous_close_spot(symbol: str, day: str | None = None) -> float | None:
     le gamma au spot courant ferait glisser les murs avec le prix
     (cf. metrics.gex_at_spot).
     """
-    day = day or datetime.now().strftime("%Y-%m-%d")
+    day = day or datetime.now(ET).strftime("%Y-%m-%d")
     h = load_history(symbol)
     if h.empty or "spot" not in h.columns:
         return None
