@@ -16,7 +16,8 @@ import numpy as np
 import pandas as pd
 
 from . import greeks, rates
-from .config import CONTRACT_MULTIPLIER, SETTINGS, DataQuality
+from .config import CONTRACT_MULTIPLIER, SETTINGS
+from .domain import DataQuality
 from .ingest import ChainSnapshot
 
 ET = ZoneInfo("America/New_York")

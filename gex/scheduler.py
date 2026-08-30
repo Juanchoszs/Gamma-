@@ -16,7 +16,8 @@ import pandas as pd
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from . import backup, flowtape, idxopt, metrics, rates, roll, store
-from .config import SETTINGS, UNDERLYINGS, DataQuality
+from .config import SETTINGS, UNDERLYINGS
+from .domain import DataQuality
 from .ingest import ChainSnapshot, fetch_chain, fetch_index_spot
 from .metrics import ET, SummaryMetrics
 from . import futopt

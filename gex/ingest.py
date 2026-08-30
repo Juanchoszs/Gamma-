@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, date, timezone
 from zoneinfo import ZoneInfo
 
-from .config import DataQuality
+from .domain import DataQuality
 
 _ET = ZoneInfo("America/New_York")
 
