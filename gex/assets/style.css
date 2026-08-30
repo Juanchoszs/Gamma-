@@ -1,21 +1,19 @@
-/* GEX Dashboard — feuille de style (Dash sert automatiquement assets/).
-   Direction : sombre, dense, outil pro — hiérarchie par le contraste et
-   l'espacement plutôt que par les bordures. */
+/* GEX Dashboard visual system: dense, dark, and terminal-oriented. */
 
 :root {
-  --surface: #1a1a19;
-  --surface-2: #232322;
-  --page: #0d0d0d;
+  --surface: rgba(26, 26, 25, 0.88);
+  --surface-2: rgba(35, 35, 34, 0.96);
+  --page: #0b0c0e;
   --ink: #ffffff;
   --ink-2: #c3c2b7;
   --muted: #898781;
-  --line: #2c2c2a;
+  --line: rgba(255, 255, 255, 0.10);
   --accent: #3987e5;
   --pos: #3987e5;
   --neg: #e66767;
   --warn: #c98500;
   --ok: #199e70;
-  --radius: 8px;
+  --radius: 10px;
   --font: system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
@@ -27,9 +25,10 @@ body {
   color: var(--ink);
   font-family: var(--font);
   -webkit-font-smoothing: antialiased;
+  background-image: radial-gradient(circle at 85% -15%, rgba(57, 135, 229, 0.09), transparent 32rem);
 }
 
-/* ------------------------------------------------------- avis NQ/ES natif */
+/* ------------------------------------------------------- native NQ/ES notice */
 
 .native-banner {
   background: rgba(230, 103, 103, 0.15);
@@ -59,6 +58,7 @@ body {
 
 .native-overlay-card {
   background: var(--surface);
+  backdrop-filter: blur(10px);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   padding: 22px 26px;
@@ -93,8 +93,8 @@ body {
   position: sticky;
   top: 0;
   z-index: 50;
-  background: rgba(13, 13, 13, 0.92);
-  backdrop-filter: blur(8px);
+  background: rgba(11, 12, 14, 0.86);
+  backdrop-filter: blur(14px);
   border-bottom: 1px solid var(--line);
   padding: 10px 24px 0;
 }
@@ -121,7 +121,7 @@ body {
   width: 22px;
   height: 22px;
   border-radius: 6px;
-  background: linear-gradient(135deg, var(--accent), var(--ok));
+  background: linear-gradient(135deg, var(--accent), #2c5ca2);
   display: grid;
   place-items: center;
   font-size: 11px;
@@ -138,7 +138,7 @@ body {
   margin-left: 2px;
 }
 
-/* toolbar : groupes de contrôles étiquetés */
+/* Labeled control groups. */
 
 .toolbar {
   display: flex;
@@ -162,7 +162,7 @@ body {
   white-space: nowrap;
 }
 
-/* ------------------------------------------------- contrôles segmentés */
+/* ------------------------------------------------- segmented controls */
 
 .seg {
   display: inline-flex;
@@ -200,10 +200,10 @@ body {
   background: var(--surface-2);
   color: var(--ink);
   font-weight: 600;
-  box-shadow: inset 0 0 0 1px rgba(57, 135, 229, 0.45);
+  box-shadow: inset 0 0 0 1px rgba(57, 135, 229, 0.55);
 }
 
-/* case à cocher autonome (Major Walls) */
+/* Standalone Major Walls checkbox. */
 .check {
   display: inline-flex;
   background: var(--surface);
@@ -252,6 +252,15 @@ body {
   border-radius: var(--radius);
   padding: 11px 14px 12px;
   overflow: hidden;
+  backdrop-filter: blur(10px);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.18);
+  transition: transform 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+}
+
+.stat:hover {
+  transform: translateY(-2px);
+  border-color: rgba(255, 255, 255, 0.18);
+  background: var(--surface-2);
 }
 
 .stat::before {
@@ -275,6 +284,7 @@ body {
   letter-spacing: -0.02em;
   margin: 3px 0 2px;
   line-height: 1.1;
+  font-variant-numeric: tabular-nums;
 }
 
 .stat-sub { font-size: 10.5px; color: var(--ink-2); }
@@ -298,6 +308,7 @@ body {
   border-radius: 4px;
   overflow: hidden;
   background: var(--line);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.35);
 }
 
 .pc-gauge-fill { height: 100%; transition: width 0.4s ease; }
@@ -314,6 +325,8 @@ body {
   padding: 10px 14px 11px 16px;
   margin-bottom: 12px;
   overflow: hidden;
+  backdrop-filter: blur(10px);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.16);
 }
 
 .regime-banner::before {
@@ -357,6 +370,7 @@ body {
   font-size: 12.5px;
   font-variant-numeric: tabular-nums;
   transition: transform 0.1s ease, background 0.12s ease;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.14);
 }
 
 .chip:hover { background: var(--surface-2); transform: translateY(-1px); }
@@ -364,8 +378,7 @@ body {
 .chip .chip-meta { color: var(--muted); font-size: 10.5px; }
 .chips-prefix { font-size: 11px; color: var(--muted); margin-right: 2px; }
 
-/* bandeau de niveaux + bouton de copie TradingView, alignés sur une ligne :
-   le bouton reste à droite, la bande de chips absorbe la largeur restante */
+/* Keep the level strip and TradingView action aligned. */
 .levels-row {
   display: flex;
   align-items: flex-start;
@@ -384,7 +397,7 @@ body {
 }
 .tv-copy:hover { color: var(--ink); border-color: var(--accent); }
 
-/* --------------------------------------------- état du flux temps réel */
+/* --------------------------------------------- real-time feed status */
 .rt-badge {
   display: inline-flex;
   align-items: center;
@@ -439,9 +452,11 @@ body {
   border-bottom: 2px solid var(--accent) !important;
 }
 
-/* ------------------------------------------------------------- contenus */
+/* ------------------------------------------------------------- content */
 
 .page { padding: 0 24px 24px; }
+
+.page > * { max-width: 1680px; margin-left: auto; margin-right: auto; }
 
 .hint {
   font-size: 11px;
@@ -450,16 +465,82 @@ body {
   margin-bottom: 10px;
   padding-left: 9px;
   border-left: 2px solid var(--line);
+  opacity: 0.9;
 }
 
-.row { display: flex; gap: 12px; flex-wrap: wrap; }
+.row { display: flex; gap: 14px; flex-wrap: wrap; }
 .row > * { flex: 1; min-width: 340px; }
 
 .graph-card {
-  background: var(--surface);
-  border: 1px solid var(--line);
+  background: linear-gradient(145deg, rgba(31, 32, 32, 0.94), rgba(20, 21, 22, 0.94));
+  border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: var(--radius);
   overflow: hidden;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.graph-card:hover {
+  border-color: rgba(57, 135, 229, 0.35);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.32);
+}
+
+.dash-graph {
+  background: linear-gradient(145deg, rgba(31, 32, 32, 0.94), rgba(20, 21, 22, 0.94));
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
+}
+
+.dash-graph > div {
+  background: transparent !important;
+}
+
+.dash-graph .js-plotly-plot {
+  min-height: 420px;
+}
+
+.graph-card .js-plotly-plot,
+.graph-card .plot-container {
+  width: 100%;
+}
+
+.js-plotly-plot .plotly .modebar {
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.js-plotly-plot:hover .plotly .modebar { opacity: 0.75; }
+
+.js-plotly-plot .plotly .modebar-btn path { fill: var(--ink-2); }
+
+.js-plotly-plot .plotly .modebar-btn:hover path { fill: var(--accent); }
+
+.js-plotly-plot .plotly .gtitle {
+  font-weight: 600 !important;
+  letter-spacing: -0.01em;
+}
+
+.page > .row,
+.page > div > .row {
+  align-items: stretch;
+}
+
+.page > div > .row > .dash-graph {
+  min-width: 0;
+}
+
+.page > div > .row > .dash-graph,
+.page > div > .row > .dash-graph .js-plotly-plot {
+  flex: 1 1 0;
+}
+
+.daybar {
+  padding: 8px 10px;
+  background: rgba(26, 26, 25, 0.56);
+  border: 1px solid var(--line);
+  border-radius: 8px;
 }
 
 .footer {
@@ -468,9 +549,10 @@ body {
   margin-top: 18px;
   padding-top: 12px;
   border-top: 1px solid var(--line);
+  opacity: 0.8;
 }
 
-/* barre de sélection du jour de flux */
+/* Flow-day selector. */
 .daybar {
   display: flex;
   gap: 8px;
@@ -492,7 +574,7 @@ body {
 .btn:hover { background: var(--surface-2); color: var(--ink); border-color: #3a3a37; }
 .btn:active { transform: translateY(1px); }
 
-/* lien-bouton de la barre haute (FAQ) */
+/* Header FAQ link. */
 .linkbtn {
   display: inline-flex;
   align-items: center;
@@ -509,11 +591,7 @@ body {
 .linkbtn::after { content: "↗"; font-size: 10px; opacity: 0.6; }
 .linkbtn:hover { background: var(--surface-2); color: var(--ink); border-color: #3a3a37; }
 
-/* Dropdown Dash — habillage sombre.
-   ATTENTION : les versions récentes de Dash utilisent les classes
-   .dash-dropdown-* (et non les anciennes .Select-* de react-select). Sans
-   ces règles, le texte hérite du blanc du body sur fond blanc : la valeur
-   sélectionnée devient invisible. */
+/* Dash dropdown styling. */
 .dash-dropdown {
   background: var(--surface);
   border: 1px solid var(--line);
@@ -539,7 +617,7 @@ body {
 .dash-dropdown svg { fill: var(--muted); }
 .dash-dropdown:hover { border-color: #3a3a37; }
 
-/* liste déroulante */
+/* Dropdown menu. */
 .dash-dropdown-menu,
 .dash-dropdown-options,
 .dash-dropdown-option-list {
@@ -571,18 +649,19 @@ body {
   .stat-value { font-size: 21px; }
 }
 
-/* mention de transposition d'échelle (au-dessus des niveaux) */
+/* Scale transformation note. */
 .scale-note {
   font-size: 11px;
   color: var(--ok);
   margin-right: 4px;
 }
 
-/* --- Tape : tableau de transactions en direct --- */
+/* --- Live transaction tape --- */
 .tape-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 .tape-table th {
   text-align: left;
@@ -593,6 +672,7 @@ body {
   position: sticky;
   top: 0;
   background: var(--surface);
+  backdrop-filter: blur(8px);
 }
 .tape-td {
   padding: 4px 10px;

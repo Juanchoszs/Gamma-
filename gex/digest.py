@@ -1,37 +1,4 @@
-"""État du gamma condensé, pour diffusion partageable (bot Discord, page, API).
-
-Transforme les métriques par sous-jacent en un VERDICT qualitatif — la
-conclusion, pas la donnée brute. Les données viennent du flux dxFeed temps
-réel (compte courtier), sur TOUS les sous-jacents : c'est l'intérêt du projet.
-« Gamma négatif sur SPX » est une analyse que nous produisons, pas le feed —
-ce qui permet de la partager sans rediffuser les chaînes dxFeed (usage
-personnel du flux à respecter côté diffusion).
-
-Format calqué sur la demande (4 exemples du 2026-07-30) :
-- une ligne par état, regroupant les symboles qui le partagent :
-  « {Gamma sign} - {Delta sign} ({gloss dealer}) sur SPX, SPY… » ;
-- « Fort Gamma Négatif » quand le gamma net est dans la queue forte de son
-  propre historique (même logique de percentile que metrics.regime_read) ;
-- ligne VIX si au-dessus du seuil ;
-- couleur (vert / orange / rouge) + verdict de trading contrarien ;
-- ligne de confiance (forte / moyenne / faible) selon la couverture des données.
-
-Le VERDICT ne compte pas les symboles à égalité : il raisonne par FAMILLE
-indépendante (S&P : SPX/SPY/ES — Nasdaq : NDX/QQQ/NQ), car ce sont deux vues
-d'un même sous-jacent chacune. Chaque famille agrège l'intensité de ses
-symboles (poids indice cash > ETF > future) en un score, puis les deux familles
-+ le VIX donnent la couleur (cf. _verdict). L'indice cash (SPX/NDX) est l'indice
-principal : s'il passe en fort négatif, sa famille l'est.
-
-Décodage du format utilisateur, vérifié cohérent sur les 8 lignes des
-exemples : le glose « (Dealers long/short gamma) » suit le signe du DELTA
-(Delta+ → « long gamma », Delta− → « short gamma »), pas du gamma. Reproduit
-tel quel — c'est le texte public de l'utilisateur.
-
-⚠️ Pas un conseil : décrit la mécanique de couverture des dealers, jamais une
-prise de position. La ligne de verdict qualifie le RISQUE du contrarien, pas
-une direction.
-"""
+"""GEX dashboard application."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -42,16 +9,16 @@ import pandas as pd
 
 PARIS = ZoneInfo("Europe/Paris")
 
-# Ordre d'affichage et périmètre (les 6 des exemples).
+
 SYMBOLS = ("SPX", "SPY", "NDX", "QQQ", "ES", "NQ")
 
-# Seuils — configurables, valeurs par défaut calées sur les exemples.
-VIX_SEUIL = 16.0          # au-dessus : ligne d'alerte « fin du confort » (info)
-VIX_IMPACT = 20.0         # au-dessus : force au moins l'orange (VIX vraiment élevé)
 
-# Paliers de régime VIX (borne SUP exclue, label, emoji) — le dernier attrape le
-# reste. « élevé » commence vraiment vers 20 (au-dessus de la moyenne long
-# terme) ; 16 (= VIX_SEUIL) n'est que la « fin du confort », pas « élevé ».
+VIX_SEUIL = 16.0
+VIX_IMPACT = 20.0
+
+
+
+
 VIX_GRADES = (
     (12.0, "Complaisance", "😴"),
     (16.0, "Calme", "🟢"),
@@ -60,33 +27,33 @@ VIX_GRADES = (
     (35.0, "Stress", "🔴"),
     (float("inf"), "Panique", "🚨"),
 )
-FORT_PERCENTILE = 0.67    # |net_gex| dans le tiers supérieur de son historique
-FORT_MIN_HISTORY = 20     # sans assez d'historique, pas de « Fort » deviné
+FORT_PERCENTILE = 0.67
+FORT_MIN_HISTORY = 20
 
-# Couleurs Discord (barre d'embed) — vert / orange / rouge.
+
 COLORS = {"green": 0x2ECC71, "orange": 0xE67E22, "red": 0xE74C3C}
 
-# Lecture du RISQUE ajoutée sous les états à Gamma POSITIF (régime amorti) : le
-# marché « aide » un sens de couverture, donc l'autre sens travaille à
-# contre-courant. C'est une asymétrie de RISQUE, pas un ordre (aucun « achète /
-# vends »). Sur Gamma négatif, rien : le verdict contrarien couvre déjà le cas.
+
+
+
+
 _LECTURE_RISQUE = {
     ("Gamma Positif", "Delta Négatif"): "Réduire le risque sur les shorts | Long avec très peu de risque",
     ("Gamma Positif", "Delta Positif"): "Réduire le risque sur les longs | Short avec très peu de risque",
 }
 
-# Familles indépendantes. Le régime réel tient à DEUX classes d'actifs, pas à
-# six marchés : SPX/SPY/ES sont trois vues du même S&P 500 ; NDX/QQQ/NQ du même
-# Nasdaq. On les agrège par famille pour ne pas compter trois fois le même
-# sous-jacent. Poids = importance du marché d'options : indice cash > ETF >
-# future. L'indice cash est aussi l'« indice principal » (le vrai marché des
-# dealers) : s'il passe en fort négatif, toute la famille l'est.
+
+
+
+
+
+
 FAMILLES = {
     "S&P":    {"principal": "SPX", "poids": {"SPX": 3, "SPY": 2, "ES": 1}},
     "Nasdaq": {"principal": "NDX", "poids": {"NDX": 3, "QQQ": 2, "NQ": 1}},
 }
-# Repli quand l'indice principal est absent : score de famille sous ce seuil =
-# fort négative (échelle d'intensité -2..+1, cf. _intensite).
+
+
 FAMILLE_FORT_SEUIL = -1.5
 _CONF_RANG = {"faible": 0, "moyenne": 1, "forte": 2}
 
@@ -94,14 +61,14 @@ _CONF_RANG = {"faible": 0, "moyenne": 1, "forte": 2}
 @dataclass
 class Digest:
     header: str
-    lines: list[str]                 # lignes d'état groupées
+    lines: list[str]
     vix_line: str | None
     verdict: str
-    color: str                       # "green" | "orange" | "red"
-    confidence: str | None = None    # "forte" | "moyenne" | "faible"
-    signature: tuple = field(default_factory=tuple)   # pour détecter un changement
-    families: dict = field(default_factory=dict)      # {famille: {score, statut, confiance}}
-    close_message: str = ""                           # post automatique de clôture (22h)
+    color: str
+    confidence: str | None = None
+    signature: tuple = field(default_factory=tuple)
+    families: dict = field(default_factory=dict)
+    close_message: str = ""
 
     def to_text(self) -> str:
         parts = [self.header, ""] + self.lines
@@ -118,7 +85,7 @@ class Digest:
 
 
 def vix_grade(vix: float | None) -> dict | None:
-    """Régime du VIX (label + emoji) selon VIX_GRADES. None si VIX inconnu."""
+    """Build the requested dashboard output."""
     if vix is None:
         return None
     for sup, label, emoji in VIX_GRADES:
@@ -134,11 +101,7 @@ def _header(now: datetime) -> str:
 
 
 def _is_fort(net_gex: float, hist) -> bool:
-    """Gamma négatif ET dans la queue forte de son propre historique.
-
-    Symétrique de la magnitude DEX de metrics.regime_read : on ne qualifie de
-    « Fort » que si assez d'historique existe, jamais au jugé.
-    """
+    """Internal helper."""
     if net_gex >= 0 or hist is None:
         return False
     ref = pd.Series(list(hist), dtype="float64").dropna().abs()
@@ -148,10 +111,7 @@ def _is_fort(net_gex: float, hist) -> bool:
 
 
 def classify(net_gex: float, net_dex: float, hist=None) -> dict:
-    """État d'un sous-jacent : libellés Gamma/Delta + glose dealer.
-
-    `hist` : série/liste des net_gex passés du même symbole, pour le « Fort ».
-    """
+    """Build the requested dashboard output."""
     fort = _is_fort(net_gex, hist)
     if fort:
         gamma = "Fort Gamma Négatif"
@@ -161,14 +121,14 @@ def classify(net_gex: float, net_dex: float, hist=None) -> dict:
         gamma = "Gamma Positif"
     delta_pos = net_dex >= 0
     delta = "Delta Positif" if delta_pos else "Delta Négatif"
-    # glose calquée sur le texte utilisateur : suit le DELTA, pas le gamma
+
     gloss = "Dealers long gamma" if delta_pos else "Dealers short gamma"
     return {"gamma": gamma, "delta": delta, "gloss": gloss,
             "neg": net_gex < 0, "fort": fort}
 
 
-# Traductions EN pour le bandeau du dashboard (le bot reste FR). Le bandeau doit
-# dire EXACTEMENT la même chose que le digest, dans la langue de l'interface.
+
+
 _GAMMA_EN = {"Gamma Positif": "Positive Gamma", "Gamma Négatif": "Negative Gamma",
              "Fort Gamma Négatif": "Strong Negative Gamma"}
 _DELTA_EN = {"Delta Positif": "Positive Delta", "Delta Négatif": "Negative Delta"}
@@ -180,13 +140,7 @@ _LECTURE_RISQUE_EN = {
 
 def symbol_reading(net_gex: float, net_dex: float, hist=None,
                    lang: str = "fr") -> dict:
-    """Lecture d'UN symbole — MÊME texte que les lignes du digest (bot), pour que
-    le bandeau du dashboard dise exactement la même chose. Traduit en EN si
-    besoin (même structure). Renvoie {text, gamma}.
-
-    `text` : « Gamma X - Delta Y (Dealers … gamma) » + éventuellement la ligne de
-    lecture du risque (sur Gamma positif). `gamma` (FR) : pour la couleur.
-    """
+    """Build the requested dashboard output."""
     c = classify(net_gex, net_dex, hist)
     if lang == "en":
         gamma, delta = _GAMMA_EN.get(c["gamma"], c["gamma"]), _DELTA_EN.get(c["delta"], c["delta"])
@@ -202,17 +156,13 @@ def symbol_reading(net_gex: float, net_dex: float, hist=None,
 
 def build_digest(rows: list[dict], vix: float | None = None,
                  now: datetime | None = None, vix_seuil: float = VIX_SEUIL) -> Digest:
-    """Construit le digest à partir des états par symbole.
-
-    `rows` : liste de dicts {symbol, net_gex, net_dex, hist?}. L'ordre de
-    sortie suit `SYMBOLS`, pas l'ordre d'entrée.
-    """
+    """Build the requested dashboard output."""
     now = now or datetime.now(PARIS)
     by_symbol = {r["symbol"]: r for r in rows if r.get("symbol") in SYMBOLS
                  and r.get("net_gex") is not None}
 
-    # regroupe les symboles partageant exactement le même état, dans l'ordre
-    # d'affichage ; une clé = (gamma, delta, gloss)
+
+
     groupes: dict[tuple, list[str]] = {}
     etats: dict[str, dict] = {}
     for sym in SYMBOLS:
@@ -236,9 +186,9 @@ def build_digest(rows: list[dict], vix: float | None = None,
 
     color, verdict, familles = _verdict(etats, vix, vix_seuil)
     confidence = _confiance_globale(familles)
-    # Signature = régime réel (statut par famille + couleur) : on ne re-poste
-    # que sur un vrai changement de verdict, pas au moindre frémissement d'un
-    # petit frère (SPY/ES/QQQ/NQ) qui ne fait pas basculer sa famille.
+
+
+
     signature = tuple(sorted((nom, f["statut"]) for nom, f in familles.items()))
     signature += (("couleur", color),)
     return Digest(_header(now), lines, vix_line, verdict, color, confidence,
@@ -246,21 +196,14 @@ def build_digest(rows: list[dict], vix: float | None = None,
 
 
 def _liste(syms: list[str]) -> str:
-    """« SPX, SPY et NDX » — virgules puis « et » avant le dernier."""
+    """Internal helper."""
     if len(syms) == 1:
         return syms[0]
     return ", ".join(syms[:-1]) + " et " + syms[-1]
 
 
 def _intensite(c: dict) -> int:
-    """Intensité signée d'un symbole, depuis son classify().
-
-    Fort négatif -2 · Négatif -1 · Positif +1. Volontairement ASYMÉTRIQUE :
-    pas de « fort positif » (+2). En intraday, un fort gamma négatif change le
-    comportement du marché (accélérations, cassures) ; un gamma positif plus
-    élevé ne fait que renforcer une stabilité déjà connue — la nuance +1/+2
-    n'est pas exploitable, la nuance -1/-2 l'est.
-    """
+    """Internal helper."""
     if c["fort"]:
         return -2
     return -1 if c["neg"] else 1
@@ -268,18 +211,7 @@ def _intensite(c: dict) -> int:
 
 def _famille(etats: dict[str, dict], poids: dict[str, int],
              principal: str) -> dict | None:
-    """État d'une famille : score pondéré normalisé, statut, confiance.
-
-    - `score` : moyenne pondérée des intensités PRÉSENTES, normalisée par les
-      poids présents → échelle stable [-2, +1] même si une source manque ;
-    - `statut` : 'fort_neg' | 'neg' | 'pos'. `fort_neg` dès que l'indice
-      principal (SPX/NDX) est en fort négatif — règle explicite « le cash index
-      commande » — ou, à défaut d'indice principal, si le score plonge sous le
-      seuil ;
-    - `confiance` : 'forte' (indice principal + les 3 symboles, signes
-      concordants), 'faible' (indice principal absent, ou signes qui se
-      contredisent), 'moyenne' sinon.
-    """
+    """Internal helper."""
     presents = {s: etats[s] for s in poids if s in etats}
     if not presents:
         return None
@@ -308,7 +240,7 @@ def _famille(etats: dict[str, dict], poids: dict[str, int],
 
 
 def _confiance_globale(familles: dict[str, dict]) -> str | None:
-    """La plus faible des confiances de famille (le maillon faible commande)."""
+    """Internal helper."""
     if not familles:
         return None
     return min((f["confiance"] for f in familles.values()),
@@ -317,19 +249,7 @@ def _confiance_globale(familles: dict[str, dict]) -> str | None:
 
 def _verdict(etats: dict[str, dict], vix: float | None,
              vix_seuil: float) -> tuple[str, str, dict[str, dict]]:
-    """Couleur + phrase de verdict, décidés par les DEUX familles (pas les 6
-    symboles) plus le VIX :
-
-    - rouge  : les 2 familles négatives, OU une famille en fort négatif ;
-    - orange : 1 famille négative, OU VIX vraiment élevé (≥ VIX_IMPACT = 20) ;
-    - vert   : sinon.
-
-    Le VIX ne force la couleur qu'à partir de VIX_IMPACT (20, « élevé ») : entre
-    VIX_SEUIL (16) et 20, la ligne d'alerte s'affiche (fin du confort) mais un
-    verdict sain reste vert. `vix_seuil` (info) n'entre donc pas dans la couleur.
-
-    Retourne aussi le détail par famille (pour la confiance et la signature).
-    """
+    """Internal helper."""
     familles = {}
     for nom, spec in FAMILLES.items():
         r = _famille(etats, spec["poids"], spec["principal"])
@@ -351,14 +271,14 @@ def _verdict(etats: dict[str, dict], vix: float | None,
     return "green", _verdict_vert(etats), familles
 
 
-# Message de clôture : on précise le sens des MM PAR INSTRUMENT tradé (futures).
+
 _CLOSE_SYMBOLS = ("NQ", "ES")
 _ARTICLES = {"NQ": "le NQ", "ES": "l'ES", "SPX": "le SPX", "NDX": "le NDX",
              "SPY": "le SPY", "QQQ": "le QQQ"}
 
 
 def _join_syms(syms: list[str]) -> str:
-    """« le NQ et l'ES » — articles + « et » avant le dernier."""
+    """Internal helper."""
     labels = [_ARTICLES.get(s, s) for s in syms]
     if len(labels) == 1:
         return labels[0]
@@ -366,20 +286,17 @@ def _join_syms(syms: list[str]) -> str:
 
 
 def _close_message(etats: dict[str, dict]) -> str:
-    """Message automatique de « clôture » (heure fixée côté bot) : arrêter le
-    contrarien + sens des Market Makers PAR instrument. Gamma+ → MM à
-    contre-sens du delta (Delta− → long, Delta+ → short) ; Gamma− →
-    « amplificateur » (danger). Contexte de risque, pas un ordre."""
+    """Internal helper."""
     long_, short_, ampli = [], [], []
     for sym in _CLOSE_SYMBOLS:
         e = etats.get(sym)
         if e is None:
             continue
-        if e["neg"]:                              # gamma négatif → amplificateur
+        if e["neg"]:
             ampli.append(sym)
-        elif e["delta"] == "Delta Négatif":       # gamma+ delta− → MM long
+        elif e["delta"] == "Delta Négatif":
             long_.append(sym)
-        else:                                     # gamma+ delta+ → MM short
+        else:
             short_.append(sym)
 
     parts = []
@@ -392,7 +309,7 @@ def _close_message(etats: dict[str, dict]) -> str:
     if ampli:
         v = "est" if len(ampli) == 1 else "sont"
         amp = _join_syms(ampli)
-        amp = amp[:1].upper() + amp[1:]          # 1re lettre seulement (garder « ES »)
+        amp = amp[:1].upper() + amp[1:]
         warn = (f"⚠️ {amp} {v} en régime **amplificateur de mouvement** — ça "
                 f"risque de mal se passer.")
         milieu = f"{milieu} {warn}" if milieu else warn
@@ -405,29 +322,25 @@ def _close_message(etats: dict[str, dict]) -> str:
 
 
 def _verdict_vert(etats: dict[str, dict]) -> str:
-    """Verdict vert, rendu DIRECTIONNEL quand un sens de delta domine (régime
-    amorti : le côté favorisé par la couverture est peu risqué, l'autre risqué).
-    Delta partagé → phrase neutre. Asymétrie de RISQUE, pas un ordre."""
+    """Internal helper."""
     n_neg = sum(1 for e in etats.values() if e["delta"] == "Delta Négatif")
     n_pos = sum(1 for e in etats.values() if e["delta"] == "Delta Positif")
-    if n_neg > n_pos:      # marché majoritairement Delta− → longs favorisés
+    if n_neg > n_pos:
         return ("Trading contrarien sur session US : très peu de risque sur les "
                 "longs, risqué sur les shorts.")
-    if n_pos > n_neg:      # Delta+ → shorts favorisés
+    if n_pos > n_neg:
         return ("Trading contrarien sur session US : très peu de risque sur les "
                 "shorts, risqué sur les longs.")
     return "Trading contrarien avec peu de risque sur session US."
 
 
-# --------------------------------------------------------------------------
-# Lecture de l'état courant (branche sur le moteur ; utilisé par l'API et le
-# job planifié). Isolé de la logique pure ci-dessus pour rester testable.
-# --------------------------------------------------------------------------
+
+
+
+
 
 def _preferred_key(symbol: str) -> str:
-    """Native _RT si elle a un état frais, sinon le symbole de base — même
-    règle que l'interface (app.chain_state), répliquée ici pour ne pas importer
-    tout le dashboard."""
+    """Internal helper."""
     from .rtquote import credentials_present
     from .scheduler import STATE
     if symbol in ("SPX", "NDX", "SPY", "QQQ") and credentials_present():
@@ -451,7 +364,7 @@ def _current_vix() -> float | None:
 
 
 def current_digest(now: datetime | None = None) -> Digest:
-    """Digest de l'état courant, lu depuis STATE + historique + VIX."""
+    """Build the requested dashboard output."""
     from . import store
     from .scheduler import STATE
     rows = []

@@ -1,42 +1,36 @@
-"""Ingestion of option chains from CBOE delayed endpoint.
-
-Undocumented public endpoint: https://cdn.cboe.com/api/global/
-delayed_quotes/options/{symbol}.json (indices prefixed with "_").
-A GET returns the full chain (bid/ask, IV, OI, volume, CBOE Greeks)
-plus the spot. Delay ~15 min at source.
-"""
+"""CBOE option-chain ingestion."""
 from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass, field
-from datetime import datetime, date, timezone
+from dataclasses import dataclass
+from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
-
-from .domain import DataQuality
-
-_ET = ZoneInfo("America/New_York")
 
 import pandas as pd
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+from .domain import DataQuality
+
+_ET = ZoneInfo("America/New_York")
+
 log = logging.getLogger(__name__)
 
 BASE_URL = "https://cdn.cboe.com/api/global/delayed_quotes/options/{sym}.json"
 
-# OCC symbol: ROOT + YYMMDD + C/P + strike*1000 in 8 digits.
+# OCC format: ROOT + YYMMDD + C/P + strike * 1000 in 8 digits.
 OCC_RE = re.compile(r"^(?P<root>.+?)(?P<exp>\d{6})(?P<cp>[CP])(?P<strike>\d{8})$")
 
 
 @dataclass
 class ChainSnapshot:
-    symbol: str                 # internal key ("SPX")
+    symbol: str
     spot: float
-    feed_timestamp: datetime    # CBOE feed timestamp (ET, delayed ~15 min)
-    fetched_at: datetime        # local pull time (UTC)
-    options: pd.DataFrame       # one row per contract
+    feed_timestamp: datetime
+    fetched_at: datetime
+    options: pd.DataFrame
     data_quality: DataQuality = DataQuality.VALID
     age_seconds: float | None = None
 
@@ -94,8 +88,6 @@ def parse_chain(symbol: str, raw: dict, fetched_at: datetime) -> ChainSnapshot:
     return ChainSnapshot(
         symbol=symbol,
         spot=float(data["current_price"]),
-        # le champ timestamp du feed est en UTC (vérifié empiriquement) —
-        # converti en heure de New York, stocké naïf pour affichage/historique
         feed_timestamp=datetime.strptime(raw["timestamp"], "%Y-%m-%d %H:%M:%S")
         .replace(tzinfo=timezone.utc)
         .astimezone(_ET)
@@ -106,7 +98,7 @@ def parse_chain(symbol: str, raw: dict, fetched_at: datetime) -> ChainSnapshot:
 
 
 def fetch_chain(symbol: str, cboe_symbol: str, timeout: int = 60) -> ChainSnapshot:
-    """Pull une chaîne complète. Lève requests.HTTPError après épuisement des retries."""
+    """Fetch a full chain and raise if the request fails."""
     url = BASE_URL.format(sym=cboe_symbol)
     resp = _SESSION.get(url, timeout=timeout)
     resp.raise_for_status()
@@ -114,9 +106,7 @@ def fetch_chain(symbol: str, cboe_symbol: str, timeout: int = 60) -> ChainSnapsh
 
 
 def fetch_index_spot(cboe_symbol: str, timeout: int = 30) -> tuple[float, datetime]:
-    """Pull léger : juste le spot d'un indice (ex. VIX en confluence pour
-    get_market_context), sans parser sa chaîne d'options — même endpoint que
-    fetch_chain, qui expose `current_price` quel que soit le symbole."""
+    """Fetch a single index spot without parsing the entire option chain."""
     url = BASE_URL.format(sym=cboe_symbol)
     resp = _SESSION.get(url, timeout=timeout)
     resp.raise_for_status()

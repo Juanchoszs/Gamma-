@@ -1,20 +1,4 @@
-"""Backfill de bougies 1 min historiques via dxFeed (dxLink), optionnel.
-
-Le flux temps réel n'enregistre que ce qu'il voit passer : au démarrage, aucun
-historique. Or trois chantiers en ont besoin tout de suite — le backtest de
-niveaux (pour mesurer des taux de tenue sur un échantillon crédible), le
-parcours du prix des séances passées sur le heatmap, et l'estimation des bêtas
-des constituants. Ce module va chercher ce passé au lieu de l'attendre.
-
-Usage :
-    python -m gex.pricehist                 # 45 jours, tous les symboles
-    python -m gex.pricehist --days 20 --symbols NQ ES NVDA
-    python -m gex.pricehist --period 5m     # granularité plus grossière,
-                                            # donc davantage de jours couverts
-
-⚠️ Données courtier : NON redistribuables. Écrites dans data/prices/ avec
-`source="dxfeed"`, répertoire que l'export ne parcourt pas (cf. gex/export.py).
-"""
+"""Optional historical one-minute candle backfill via dxFeed."""
 from __future__ import annotations
 
 import argparse
@@ -33,27 +17,19 @@ from .rtquote import credentials_present, quote_token, resolve_symbols
 
 log = logging.getLogger(__name__)
 
-# dxFeed plafonne une souscription historique à quelques milliers de bougies.
-# Observé : ~8 000 par requête, soit environ six semaines de minutes sur un
-# sous-jacent liquide. Une granularité plus grossière couvre d'autant plus de
-# jours pour le même plafond.
+# dxFeed limits historical subscriptions to a few thousand candles per request.
 OBSERVED_CAP = 8000
-# Silence après lequel on considère que dxFeed a fini d'envoyer l'historique.
+# Silence after which the historical stream is considered complete.
 IDLE_TIMEOUT_S = 12.0
 
 
 def candle_symbol(stream_symbol: str, period: str = "m") -> str:
-    """Symbole de bougie dxFeed : le symbole du flux suffixé de sa période."""
+    """Return the dxFeed candle symbol for a stream symbol and period."""
     return f"{stream_symbol}{{={period}}}"
 
 
 def candles_to_frame(rows: list[dict]) -> pd.DataFrame:
-    """Événements Candle -> table OHLCV horodatée en heure de New York.
-
-    Les bougies sans clôture exploitable sont écartées : dxFeed envoie des
-    enregistrements de synchronisation dont tous les champs valent NaN, qui
-    créeraient des trous au milieu d'une séance.
-    """
+    """Convert Candle events into a New York-time OHLCV table."""
     if not rows:
         return pd.DataFrame()
     df = pd.DataFrame(rows)
@@ -70,9 +46,7 @@ def candles_to_frame(rows: list[dict]) -> pd.DataFrame:
         "high": df["high"].astype(float),
         "low": df["low"].astype(float),
         "close": df["close"].astype(float),
-        # `ticks` compte les transactions sur le flux temps réel ; ici dxFeed
-        # fournit le volume, plus riche. Colonne distincte pour ne pas mélanger
-        # deux grandeurs sous un même nom.
+        # Keep volume separate from realtime transaction counts.
         "volume": df.get("volume", pd.Series(index=df.index, dtype=float)).astype(float),
         "source": "dxfeed",
     })
@@ -80,14 +54,7 @@ def candles_to_frame(rows: list[dict]) -> pd.DataFrame:
 
 
 def write_by_day(symbol: str, df: pd.DataFrame, min_bars: int = 2) -> list[str]:
-    """Répartit les bougies dans les fichiers journaliers du stockage.
-
-    Les journées comptant moins de `min_bars` bougies sont écartées : dxFeed
-    renvoie une bougie isolée à la borne `fromTime` demandée, séparée de
-    plusieurs semaines du reste de la série. La garder fabriquerait une séance
-    fantôme dans le sélecteur, inexploitable par ailleurs — le backtest comme
-    le tracé du prix exigent au minimum deux points.
-    """
+    """Write candles to daily storage files, excluding isolated fragments."""
     if df.empty:
         return []
     days = []
@@ -104,12 +71,7 @@ def write_by_day(symbol: str, df: pd.DataFrame, min_bars: int = 2) -> list[str]:
 
 async def fetch(stream_symbols: dict[str, str], days: int,
                 period: str = "m") -> dict[str, pd.DataFrame]:
-    """Récupère l'historique de bougies pour un ensemble de symboles.
-
-    Tout est demandé sur une seule connexion : dxFeed livre les séries en vrac,
-    on les redistribue ensuite par symbole. La collecte s'arrête après
-    IDLE_TIMEOUT_S sans nouvel envoi — il n'existe pas de marqueur de fin.
-    """
+    """Fetch historical candles for multiple symbols over one connection."""
     import websockets
 
     token, url, _ = quote_token()
@@ -128,12 +90,8 @@ async def fetch(stream_symbols: dict[str, str], days: int,
             try:
                 raw = await asyncio.wait_for(ws.recv(), timeout=IDLE_TIMEOUT_S)
             except asyncio.TimeoutError:
-                break            # plus rien n'arrive : historique complet
+                break
             except websockets.exceptions.ConnectionClosed:
-                # dxFeed clôt parfois la connexion une fois l'historique livré,
-                # ou quand une autre session utilise le même jeton. Dans les
-                # deux cas ce qui est déjà arrivé reste valable : on le garde
-                # plutôt que de tout perdre sur une exception.
                 log.info("Connexion fermée par dxFeed — %d symboles reçus",
                          len(rows))
                 break
@@ -171,7 +129,7 @@ async def fetch(stream_symbols: dict[str, str], days: int,
 
 def backfill(symbols: list[str] | None = None, days: int = 45,
              period: str = "m") -> dict[str, int]:
-    """Télécharge et enregistre l'historique. Renvoie {symbole: nb de bougies}."""
+    """Download and store historical candles."""
     if not credentials_present():
         log.error("Identifiants tastytrade absents — backfill impossible")
         return {}

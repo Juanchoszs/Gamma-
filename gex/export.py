@@ -1,18 +1,18 @@
-"""Export partageable : n'extrait que les données issues de la source publique
-CBOE, en excluant tout ce qui provient d'une source payante.
+"""Shareable export: extract only data from the public CBOE source and exclude
+anything from a paid source.
 
-Pourquoi : les données Databento (et celles d'un flux courtier) sont sous
-licence d'**usage personnel, non redistribuable**. Les métriques dérivées de la
-source publique CBOE, elles, peuvent être partagées.
+Why: Databento and broker-feed data are licensed for **personal,
+non-redistributable use**. Metrics derived from the public CBOE source can be
+shared.
 
-Principe de conception — **exclusion par défaut** : seules les lignes portant
-explicitement `source == "cboe"` sont exportées. Toute donnée de provenance
-inconnue ou absente est écartée. Une migration incomplète ou un schéma
-inattendu ne peut donc pas provoquer de fuite : au pire l'export est vide.
+Design principle—**exclude by default**: export only rows explicitly marked
+`source == "cboe"`. Unknown or missing provenance is discarded, so an
+incomplete migration or unexpected schema cannot leak data; at worst, the
+export is empty.
 
 Usage :
-    python -m gex.export --migrate           # marque la provenance des données existantes
-    python -m gex.export --out shared-data   # produit l'export partageable
+    python -m gex.export --migrate           # mark provenance of existing data
+    python -m gex.export --out shared-data   # create the shareable export
 """
 from __future__ import annotations
 
@@ -35,15 +35,14 @@ PROVENANCE_FILE = "PROVENANCE.md"
 # ------------------------------------------------------------------ migration
 
 def migrate(dry_run: bool = False) -> dict[str, int]:
-    """Ajoute la colonne `source` aux données déjà collectées.
+    """Add the `source` column to previously collected data.
 
-    Heuristique documentée, appliquée UNE FOIS :
-    - historique : une ligne horodatée exactement à 16:00:00 provient du
-      backfill Databento (build_day pose la clôture à cette heure pile) ;
-      toute autre heure vient d'un pull live CBOE.
-    - flux : les fichiers antérieurs à cette migration proviennent tous du
-      backfill. Ils sont marqués "databento" — choix volontairement prudent,
-      un faux négatif ne coûte qu'une donnée non partagée.
+    Documented one-time heuristic:
+    - history: a row timestamped exactly 16:00:00 is from the Databento
+      backfill (`build_day` uses that exact close time); any other time is from
+      a live CBOE pull.
+    - flows: all files predating this migration are from the backfill. Mark
+      them "databento" deliberately; a false negative only withholds data.
     """
     stats = {"history_cboe": 0, "history_databento": 0, "flow_files": 0}
 
@@ -78,20 +77,20 @@ def migrate(dry_run: bool = False) -> dict[str, int]:
 # --------------------------------------------------------------------- export
 
 def _filter_shareable(df: pd.DataFrame) -> pd.DataFrame:
-    """Ne garde que les lignes explicitement marquées CBOE (exclusion par défaut)."""
+    """Keep only rows explicitly marked CBOE (exclude by default)."""
     if "source" not in df.columns:
         return df.iloc[0:0]
     return df[df["source"] == SHAREABLE]
 
 
 def export(out_dir: Path) -> dict:
-    """Écrit dans out_dir la portion partageable des données."""
+    """Write the shareable portion of the data to out_dir."""
     out_dir = Path(out_dir)
     report = {"history_rows": 0, "history_excluded": 0,
               "flow_files": 0, "flow_rows": 0, "flow_excluded": 0,
               "days": [], "symbols": set()}
 
-    # --- historique
+    # --- history
     hist_path = SETTINGS.data_dir / "history" / "metrics.parquet"
     if hist_path.exists():
         h = pd.read_parquet(hist_path)
@@ -104,7 +103,7 @@ def export(out_dir: Path) -> dict:
             keep.to_parquet(dest, index=False)
             report["symbols"] |= set(keep["symbol"].unique())
 
-    # --- flux (un fichier par jour et par sous-jacent)
+    # --- flows (one file per day and underlying)
     for f in sorted((SETTINGS.data_dir / "flows").rglob("*.parquet")):
         d = pd.read_parquet(f)
         keep = _filter_shareable(d)
@@ -127,8 +126,8 @@ def export(out_dir: Path) -> dict:
 
 
 def _write_provenance(out_dir: Path, report: dict) -> None:
-    """Note de provenance jointe à l'export — indispensable pour que le
-    destinataire sache ce qu'il reçoit et à quelles conditions."""
+    """Write provenance information so recipients know what they received and
+    under which conditions."""
     days = report["days"]
     span = f"{days[0]} → {days[-1]}" if days else "—"
     (out_dir / PROVENANCE_FILE).write_text(f"""# Provenance des données

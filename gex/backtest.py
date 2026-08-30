@@ -1,25 +1,21 @@
-"""Backtest de niveaux : un niveau a-t-il tenu, cédé, et de combien ensuite ?
+"""Backtest levels: did a level hold, break, and how far did price then move?
 
-Le cœur est constitué de fonctions pures prenant (niveau, parcours de prix) :
-elles ne lisent aucun fichier, ce qui les rend testables sur des parcours
-construits à la main et réutilisables quelle que soit la source — snapshots
-maison, reconstruction Databento, ou tout ce qui viendra ensuite.
+The core consists of pure functions taking (level, price path): they read no
+files, making them testable with hand-built paths and reusable with any source
+—local snapshots, Databento reconstruction, or future sources.
 
-Trois précautions de méthode, parce qu'elles décident de la validité du
-résultat bien plus que le code :
+Three methodological safeguards determine result validity far more than code:
 
-1. **Les niveaux testés sont ceux du DÉBUT de séance.** L'open interest est
-   publié le matin ; utiliser les niveaux de clôture reviendrait à tester ce
-   qu'on ne pouvait pas connaître, et gonflerait artificiellement les taux de
-   réussite.
+1. **Test levels are from the START of the session.** Open interest is published
+   in the morning; using closing levels would test unknown information and
+   artificially inflate success rates.
 
-2. **Un niveau jamais approché n'a pas « tenu ».** Le taux de tenue n'a de sens
-   que rapporté aux séances où le prix est effectivement venu au contact —
-   sinon un niveau lointain afficherait 100 % de réussite sans rien démontrer.
+2. **A level never approached did not “hold.”** Hold rate is meaningful only
+   across sessions where price actually reached the level; otherwise a distant
+   level could show 100% success without demonstrating anything.
 
-3. **Toucher n'est pas casser.** Un dépassement d'un tick n'est pas une
-   cassure : il faut une marge, sans quoi le bruit de cotation transforme
-   chaque contact en rupture.
+3. **Touching is not breaking.** A one-tick overshoot is not a break: a margin
+   is required, otherwise quote noise turns every touch into a break.
 """
 from __future__ import annotations
 
@@ -30,18 +26,16 @@ import pandas as pd
 
 from . import metrics, store
 
-# Marge au-delà de laquelle un dépassement compte comme une cassure, en
-# fraction du prix.
+# Overshoot margin required to count as a break, expressed as a price fraction.
 #
-# Une première version utilisait 0,05 %, valeur choisie pour filtrer le bruit
-# de cotation. Mesuré sur 22 séances SPX, le dépassement médian d'un niveau
-# testé est de 0,24 % : à 0,05 %, presque tout contact était compté comme une
-# rupture et le taux de cassure montait à 90 % — un filtre de bruit ne fait pas
-# une définition de cassure, ce sont deux besoins distincts.
+# An initial version used 0.05% to filter quote noise. Across 22 SPX sessions,
+# median overshoot of a tested level was 0.24%; at 0.05%, nearly every touch
+# counted as a break and the break rate reached 90%. Noise filtering and break
+# definition are distinct requirements.
 #
-# 0,15 % (≈ 11 pts sur SPX à 7400) reste au-dessus du bruit tout en exigeant un
-# franchissement franc. Le seuil demeure une convention : `close_beyond`, qui ne
-# dépend d'aucun réglage, est la mesure la plus robuste de l'échec d'un niveau.
+# 0.15% (about 11 points on SPX at 7400) remains above noise while requiring a
+# clear crossing. The threshold is still conventional; `close_beyond`, which
+# has no tuning parameter, is the most robust measure of level failure.
 BREAK_TOL = 0.0015
 
 
@@ -51,20 +45,20 @@ class LevelOutcome:
     symbol: str
     name: str
     level: float
-    side: str            # "resistance" (au-dessus de l'ouverture) ou "support"
-    tested: bool         # le prix est venu au contact
-    broke: bool          # dépassement franc, au-delà de BREAK_TOL
-    closed_beyond: bool  # séance terminée de l'autre côté
-    excursion_pct: float # dépassement maximal au-delà du niveau, en %
-    move_after_break_pct: float | None  # parcours au-delà après la cassure
+    side: str            # "resistance" (above the open) or "support"
+    tested: bool         # price reached the level
+    broke: bool          # clear overshoot beyond BREAK_TOL
+    closed_beyond: bool  # session ended on the other side
+    excursion_pct: float # maximum overshoot beyond the level, in %
+    move_after_break_pct: float | None  # move beyond the level after breaking
 
 
 def evaluate_level(name: str, level: float, path: np.ndarray, open_px: float,
                    day: str = "", symbol: str = "",
                    tol: float = BREAK_TOL) -> LevelOutcome:
-    """Confronte un niveau au parcours du prix d'une séance.
+    """Compare a level with a session's price path.
 
-    `path` : prix ordonnés dans le temps (le premier est l'ouverture).
+    `path`: prices ordered in time (the first is the open).
     """
     side = "resistance" if level >= open_px else "support"
     margin = level * tol
@@ -83,7 +77,7 @@ def evaluate_level(name: str, level: float, path: np.ndarray, open_px: float,
     broke = bool(np.any(broken))
     move_after = None
     if broke:
-        # à partir de la première cassure, jusqu'où le prix est-il allé ?
+        # Measure the furthest move from the first break onward.
         i = int(np.argmax(broken))
         rest = path[i:]
         move_after = float((rest.max() - level) / level if side == "resistance"
@@ -99,7 +93,7 @@ def evaluate_level(name: str, level: float, path: np.ndarray, open_px: float,
 
 def evaluate_session(levels: dict[str, float], path: np.ndarray,
                      day: str = "", symbol: str = "") -> list[LevelOutcome]:
-    """Évalue tous les niveaux d'une séance contre son parcours de prix."""
+    """Evaluate all session levels against its price path."""
     if len(path) < 2:
         return []
     open_px = float(path[0])
@@ -108,12 +102,11 @@ def evaluate_session(levels: dict[str, float], path: np.ndarray,
 
 
 def summarize(outcomes: list[LevelOutcome] | pd.DataFrame) -> pd.DataFrame:
-    """Agrège par type de niveau : fréquence de test, de tenue, de cassure.
+    """Aggregate by level type: test, hold, and break frequency.
 
-    Le taux de tenue est conditionnel au test (cf. précaution 2) : `n_tested`
-    dit sur combien de séances il se calcule, et une valeur reposant sur deux
-    ou trois séances ne veut rien dire — la colonne est là pour qu'on puisse
-    s'en rendre compte.
+    Hold rate is conditional on a test (see safeguard 2): `n_tested` shows how
+    many sessions support the calculation. A value based on two or three
+    sessions is not meaningful; the column makes that visible.
     """
     df = (pd.DataFrame([asdict(o) for o in outcomes])
           if not isinstance(outcomes, pd.DataFrame) else outcomes)
@@ -130,7 +123,7 @@ def summarize(outcomes: list[LevelOutcome] | pd.DataFrame) -> pd.DataFrame:
             "n_sessions": len(g),
             "n_tested": n_t,
             "test_rate": len(tested) / len(g),
-            # tenue = testé sans cassure franche
+            # Hold means tested without a clear break.
             "hold_rate": float((~tested["broke"]).mean()) if n_t else np.nan,
             "break_rate": float(tested["broke"].mean()) if n_t else np.nan,
             "close_beyond_rate": float(tested["closed_beyond"].mean()) if n_t else np.nan,
@@ -143,18 +136,15 @@ def summarize(outcomes: list[LevelOutcome] | pd.DataFrame) -> pd.DataFrame:
 
 # --------------------------------------------------------------- adaptateurs
 def session_levels(symbol: str, day: str, spot: float | None = None) -> dict[str, float]:
-    """Niveaux du début de séance, recalculés depuis le premier snapshot.
+    """Session-start levels, recalculated from the first snapshot.
 
-    `spot` peut être fourni par l'appelant : les snapshots antérieurs à
-    l'ajout de la colonne `spot` ne le portent pas, et le premier prix du
-    parcours de la séance fait tout aussi bien l'affaire.
+    `spot` may be supplied by the caller: older snapshots do not contain the
+    column, and the first session price works just as well.
 
-    À défaut de snapshot ce jour-là, on prend le DERNIER de la séance
-    précédente. Ce n'est pas un pis-aller : l'open interest publié le matin
-    reflète la clôture de la veille, donc les niveaux qu'un trader a sous les
-    yeux à l'ouverture sont exactement ceux de cette chaîne. C'est aussi ce qui
-    rend exploitables les chaînes reconstruites depuis Databento, qui sont des
-    photos de clôture.
+    If no snapshot exists for that day, use the LAST snapshot from the previous
+    session. This is not a compromise: morning open interest reflects the prior
+    close, so these are exactly the levels visible at the open. It also makes
+    Databento-reconstructed close snapshots usable.
     """
     df = store.load_first_snapshot(symbol, day)
     if df is None or df.empty:
@@ -165,8 +155,8 @@ def session_levels(symbol: str, day: str, spot: float | None = None) -> dict[str
     if spot is None and "spot" in df.columns:
         spot = float(df["spot"].iloc[0])
     out: dict[str, float] = {}
-    # murs évalués à la clôture de la veille, comme dans le dashboard : sinon
-    # le backtest testerait des niveaux que l'outil n'a jamais affichés
+    # Evaluate walls at the prior close, as in the dashboard; otherwise the
+    # backtest would test levels the tool never displayed.
     ref = store.previous_close_spot(symbol, day) or spot
     if spot is not None:
         keys = metrics.key_levels(df, spot, ref_spot=ref)
@@ -181,21 +171,20 @@ def session_levels(symbol: str, day: str, spot: float | None = None) -> dict[str
 
 
 def session_path(symbol: str, day: str) -> np.ndarray:
-    """Parcours du prix sur une séance.
+    """Return the price path for a session.
 
-    Deux sources, par ordre de préférence :
+    Two sources, in order of preference:
 
-    1. **Bougies 1 min** du flux temps réel — les extrêmes y sont exacts, donc
-       une mèche qui touche un niveau est vue. C'est la seule résolution qui
-       permet de mesurer honnêtement un taux de cassure.
-    2. **Historique des métriques** (un point par snapshot, soit 10 min) —
-       repli quand les bougies manquent. Les mèches y disparaissent : les taux
-       obtenus sont alors un plancher, jamais une mesure.
+    1. **1-minute bars** from the real-time feed: extremes are exact, so a wick
+       touching a level is captured. This is the only resolution that measures
+       break rates honestly.
+    2. **Metrics history** (one point per snapshot, about 10 minutes): fallback
+       when bars are missing. Wicks disappear, so resulting rates are a floor,
+       never a measurement.
 
-    Les bougies sont dépliées en open/high/low/close afin que `evaluate_level`
-    voie les extrêmes ; l'ordre high-puis-low à l'intérieur d'une minute est
-    une convention (on ne sait pas lequel est venu en premier), sans effet sur
-    les indicateurs calculés.
+    Bars are expanded to open/high/low/close so `evaluate_level` sees extremes.
+    High-then-low order within a minute is a convention (the actual order is
+    unknown) and does not affect calculated indicators.
     """
     px = store.load_prices(symbol, day)
     if not px.empty:
@@ -210,19 +199,16 @@ def session_path(symbol: str, day: str) -> np.ndarray:
 
 
 def path_resolution(symbol: str, day: str) -> str:
-    """Source réellement utilisée pour la séance — à afficher avec tout
-    résultat, un taux calculé sur du 10 min ne valant pas un taux calculé sur
-    des bougies."""
+    """Return the actual session resolution used for the result."""
     return "1min" if not store.load_prices(symbol, day).empty else "snapshot"
 
 
 def run(symbol: str, days: list[str] | None = None) -> pd.DataFrame:
-    """Backtest sur toutes les séances disposant à la fois de niveaux et de prix.
+    """Backtest every session with both levels and prices.
 
-    Les jours candidats sont ceux où l'on a un parcours de prix : les niveaux,
-    eux, peuvent venir de la séance précédente (cf. `session_levels`). Se
-    limiter aux jours porteurs d'un snapshot écarterait des séances pourtant
-    testables.
+    Candidate days are those with a price path; levels may come from the
+    previous session (see `session_levels`). Restricting to days with a
+    snapshot would omit otherwise testable sessions.
     """
     days = days or sorted(set(store.price_days(symbol))
                           | set(store.snapshot_days(symbol)))

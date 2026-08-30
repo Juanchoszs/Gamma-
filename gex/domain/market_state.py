@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
+from .quality import DataQuality
 
 ET = ZoneInfo("America/New_York")
 
@@ -13,11 +14,11 @@ ET = ZoneInfo("America/New_York")
 class MarketDataState(Enum):
     """Explicit market data states for UI and API.
 
-    LIVE           - Data is current and actively updated
-    DELAYED        - Data is available but delayed
-    MARKET_CLOSED  - Market is closed; displayed info from latest valid snapshot
-    HISTORICAL     - User is viewing a historical snapshot
-    NO_DATA        - No valid market data available
+    LIVE           - Data is current and actively updated.
+    DELAYED        - Data is available but delayed.
+    MARKET_CLOSED  - The market is closed; the latest valid snapshot is shown.
+    HISTORICAL     - The user is viewing a historical snapshot.
+    NO_DATA        - No valid market data is available.
     """
     LIVE = "LIVE"
     DELAYED = "DELAYED"
@@ -52,7 +53,7 @@ class MarketStateContext:
 def is_market_open(now_et: Optional[datetime] = None) -> bool:
     """Check if US market is currently open."""
     now_et = now_et or datetime.now(ET)
-    if now_et.weekday() >= 5:  # Saturday = 5, Sunday = 6
+    if now_et.weekday() >= 5:
         return False
     return DEFAULT_SCHEDULE.open_time <= now_et.time() <= DEFAULT_SCHEDULE.close_time
 
@@ -74,29 +75,24 @@ def resolve_market_state(context: MarketStateContext) -> MarketDataState:
         return MarketDataState.HISTORICAL
 
     if context.data_quality is not None:
-        from .quality import DataQuality
-        if context.data_quality == DataQuality.NO_DATA:
-            return MarketDataState.NO_DATA
         if context.data_quality == DataQuality.INVALID:
             return MarketDataState.NO_DATA
 
     if context.is_market_open:
         if context.data_quality is not None:
-            from .quality import DataQuality
             if context.data_quality == DataQuality.VALID:
                 return MarketDataState.LIVE
             elif context.data_quality == DataQuality.WARNING:
                 return MarketDataState.DELAYED
             elif context.data_quality in (DataQuality.STALE, DataQuality.EXPIRED):
-                return MarketDataState.STALE
-        # Default for open market with no explicit quality
+                return MarketDataState.DELAYED
+        # Default for an open market without an explicit quality.
         return MarketDataState.LIVE
     else:
-        # Market closed - check if we have a valid snapshot
+        # The market is closed; use the latest valid snapshot when available.
         if context.snapshot_timestamp is not None:
             return MarketDataState.MARKET_CLOSED
         elif context.data_quality is not None:
-            from .quality import DataQuality
             if context.data_quality in (DataQuality.VALID, DataQuality.WARNING):
                 return MarketDataState.MARKET_CLOSED
         return MarketDataState.NO_DATA

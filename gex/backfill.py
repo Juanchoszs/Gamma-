@@ -264,7 +264,7 @@ def build_day(chain: pd.DataFrame, symbol: str, day: date,
     d["delta_bs"] = np.where(is_call, dc, dc - 1.0)
     sign = np.where(is_call, 1.0, -1.0)
     d["gex"] = sign * g * d["open_interest"] * CONTRACT_MULTIPLIER * spot**2 * 0.01
-    d["dex"] = d["delta_bs"] * d["open_interest"] * CONTRACT_MULTIPLIER * spot
+    d["dex"] = -1.0 * d["delta_bs"] * d["open_interest"] * CONTRACT_MULTIPLIER * spot
     d["spot"] = float(spot)
     zg = metrics.zero_gamma(d, spot)
     if persist_chain:
@@ -292,6 +292,7 @@ def build_day(chain: pd.DataFrame, symbol: str, day: date,
         "pc_oi": float(oi_p / oi_c) if oi_c else float("nan"),
         "pc_volume": float(v_p / v_c) if v_c else float("nan"),
         "net_gex_0dte": float(d.loc[d["expiry"] == day, "gex"].sum()),
+        "net_dex": float(d["dex"].sum()),
         # Paid, personal-use data; excluded from shareable exports.
         "source": "databento",
         "_deltas": d[["instrument_id", "delta_bs", "expiry"]],

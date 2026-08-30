@@ -1,19 +1,4 @@
-"""Transposition des niveaux vers une autre échelle de prix.
-
-Deux régimes, volontairement distincts :
-
-1. **Indice vers son propre future** (SPX→ES, NDX→NQ) : décalage ADDITIF du
-   basis. C'est la conversion exacte — le future converge vers l'indice à
-   l'échéance, un strike K se lit donc K + basis sur le future.
-
-2. **Toute autre transposition** (SPX→SPY, SPX→NQ…) : conversion
-   PROPORTIONNELLE, qui préserve la distance relative au spot. Un mur situé
-   1,2 % au-dessus du spot SPX s'affiche 1,2 % au-dessus du spot cible.
-
-La transposition CROISÉE (entre familles SP et ND) est mathématiquement
-valide mais son ratio dérive en permanence : c'est un repère instantané, pas
-un niveau stable. `Scale.cross_family()` permet à l'interface de le signaler.
-"""
+"""Transform price levels between index, ETF, and futures scales."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -23,24 +8,20 @@ from .config import UNDERLYINGS, targets
 
 @dataclass(frozen=True)
 class Scale:
-    key: str            # identifiant d'échelle : "SPX", "ES", "QQQ"…
-    label: str          # libellé affiché
-    family: str         # "SP" ou "ND" — familles d'indices distinctes
-    source: str         # sous-jacent fournissant le spot ("SPX" pour "ES")
+    key: str
+    label: str
+    family: str
+    source: str
     is_future: bool = False
 
     def cross_family(self, src_underlying: str) -> bool:
-        """La transposition depuis ce sous-jacent change-t-elle de famille ?"""
+        """Return whether the source and target belong to different families."""
         src = UNDERLYINGS.get(src_underlying)
         return src is not None and src.family != self.family
 
 
 def available_scales() -> list[Scale]:
-    """Échelles proposées : chaque sous-jacent analysé, plus son future.
-
-    Les constituants (NVDA, SMH…) en sont exclus : ils alimentent les niveaux
-    de confluence, ils ne sont pas des échelles d'affichage.
-    """
+    """Return each target underlying and its associated future scale."""
     out: list[Scale] = []
     for u in targets():
         out.append(Scale(u.key, u.key, u.family, u.key))
@@ -55,8 +36,7 @@ def scale_by_key(key: str) -> Scale | None:
 
 def reference_price(scale: Scale, spots: dict[str, float],
                     bases: dict[str, float | None]) -> float | None:
-    """Prix de référence de l'échelle : le spot du sous-jacent, augmenté du
-    basis s'il s'agit du future."""
+    """Return the scale spot, adding the basis for futures."""
     spot = spots.get(scale.source)
     if spot is None:
         return None
@@ -70,13 +50,7 @@ def reference_price(scale: Scale, spots: dict[str, float],
 
 def transform(src_underlying: str, target: Scale | None,
               spots: dict[str, float], bases: dict[str, float | None]):
-    """Retourne (fonction de conversion, ratio, mode) pour passer des prix du
-    sous-jacent source à l'échelle cible.
-
-    mode ∈ {"native", "basis", "ratio"} — "native" = aucune conversion.
-    Retourne l'identité si la conversion est impossible (spot cible absent),
-    plutôt que d'afficher des niveaux faux.
-    """
+    """Return a price conversion function, ratio, and conversion mode."""
     identity = (lambda x: x), 1.0, "native"
     if target is None or target.key == src_underlying:
         return identity
@@ -85,7 +59,7 @@ def transform(src_underlying: str, target: Scale | None,
     if not src_spot:
         return identity
 
-    # cas exact : l'indice vers son propre future
+    # Exact conversion from an index to its associated future.
     if target.is_future and target.source == src_underlying:
         basis = bases.get(src_underlying)
         if basis is None:

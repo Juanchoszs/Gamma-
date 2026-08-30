@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -25,26 +25,29 @@ class DataQuality(Enum):
     MISSING = "MISSING"
 
 
+@dataclass(frozen=True)
+class ProviderQualityConfig:
+    """Age thresholds for one provider class."""
+
+    valid_seconds: int
+    warning_seconds: int
+    stale_seconds: int
+    expired_seconds: int
+
+
 @dataclass
 class DataQualityConfig:
-    """Centralized thresholds for data quality evaluation."""
-    # Seconds thresholds for CBOE delayed data
-    cboe_valid_seconds: int = 30
-    cboe_warning_seconds: int = 120
-    cboe_stale_seconds: int = 300
-    cboe_expired_seconds: int = 900
+    """Centralized age thresholds grouped by provider class."""
 
-    # Seconds thresholds for dxFeed realtime data
-    dxfeed_valid_seconds: int = 5
-    dxfeed_warning_seconds: int = 30
-    dxfeed_stale_seconds: int = 60
-    dxfeed_expired_seconds: int = 300
-
-    # Seconds thresholds for native futures/options
-    native_valid_seconds: int = 10
-    native_warning_seconds: int = 60
-    native_stale_seconds: int = 180
-    native_expired_seconds: int = 600
+    cboe: ProviderQualityConfig = field(
+        default_factory=lambda: ProviderQualityConfig(30, 120, 300, 900)
+    )
+    dxfeed: ProviderQualityConfig = field(
+        default_factory=lambda: ProviderQualityConfig(5, 30, 60, 300)
+    )
+    native: ProviderQualityConfig = field(
+        default_factory=lambda: ProviderQualityConfig(10, 60, 180, 600)
+    )
 
 
 DEFAULT_QUALITY_CONFIG = DataQualityConfig()
@@ -101,13 +104,20 @@ class DataQualityEvaluator:
 
     def _get_thresholds(self, provider: str):
         """Get quality thresholds for a provider."""
-        provider_lower = provider.lower()
-        if "dxfeed" in provider_lower:
-            return self.config.__dict__  # would need proper mapping
-        elif "native" in provider_lower:
-            return self.config.__dict__  # would need proper mapping
-        else:
-            return self.config.__dict__  # default CBOE
+        return get_quality_config(provider, self.config)
+
+
+def get_quality_config(
+    provider: str, config: Optional[DataQualityConfig] = None
+) -> ProviderQualityConfig:
+    """Return the thresholds for a provider identifier."""
+    settings = config or DEFAULT_QUALITY_CONFIG
+    normalized = provider.lower().strip()
+    if "native" in normalized or "futopt" in normalized:
+        return settings.native
+    if "dxfeed" in normalized:
+        return settings.dxfeed
+    return settings.cboe
 
 
 def evaluate_data_quality(

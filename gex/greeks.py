@@ -1,12 +1,4 @@
-"""Black-Scholes vectorisé (numpy/scipy).
-
-Conventions :
-- t en années (365 jours), sigma en volatilité annualisée (ex: 0.20),
-  r taux sans risque continu.
-- Les fonctions acceptent scalaires ou ndarrays (broadcasting numpy).
-- Pas de dividende (q=0) : acceptable pour l'agrégation GEX où le gamma
-  est dominé par les échéances courtes.
-"""
+"""Vectorized Black-Scholes calculations."""
 from __future__ import annotations
 
 import numpy as np
@@ -45,7 +37,7 @@ def put_delta(s, k, t, r, sigma):
 
 
 def gamma(s, k, t, r, sigma):
-    """Gamma, identique calls et puts."""
+    """Gamma, identical for calls and puts."""
     d1, _ = _d1_d2(s, k, t, r, sigma)
     t = np.maximum(np.asarray(t, dtype=float), _EPS)
     sigma = np.maximum(np.asarray(sigma, dtype=float), _EPS)
@@ -53,14 +45,14 @@ def gamma(s, k, t, r, sigma):
 
 
 def vega(s, k, t, r, sigma):
-    """Vega pour 1 point de vol (non divisé par 100)."""
+    """Vega for one volatility point, without division by 100."""
     d1, _ = _d1_d2(s, k, t, r, sigma)
     t = np.maximum(np.asarray(t, dtype=float), _EPS)
     return np.asarray(s, dtype=float) * norm.pdf(d1) * np.sqrt(t)
 
 
 def call_theta(s, k, t, r, sigma):
-    """Theta annualisé (diviser par 365 pour le theta/jour)."""
+    """Annualized theta; divide by 365 for daily theta."""
     d1, d2 = _d1_d2(s, k, t, r, sigma)
     t = np.maximum(np.asarray(t, dtype=float), _EPS)
     return (
@@ -70,10 +62,9 @@ def call_theta(s, k, t, r, sigma):
 
 
 def vanna(s, k, t, r, sigma):
-    """∂delta/∂sigma = ∂vega/∂S — identique calls et puts.
+    """Vanna, identical for calls and puts.
 
-    Positif sous le strike ATM-forward, négatif au-dessus (d2 change de signe).
-    Multiplier par 0.01 pour l'effet d'un point de volatilité.
+    Multiply by 0.01 to measure the effect of a one-point volatility move.
     """
     d1, d2 = _d1_d2(s, k, t, r, sigma)
     sigma = np.maximum(np.asarray(sigma, dtype=float), _EPS)
@@ -81,13 +72,7 @@ def vanna(s, k, t, r, sigma):
 
 
 def charm(s, k, t, r, sigma):
-    """Décroissance du delta avec le TEMPS QUI PASSE : ∂delta/∂t = -∂delta/∂T
-    (convention trader). Identique calls et puts en l'absence de dividende.
-
-    Signe intuitif : un call ITM gagne du delta en approchant de l'expiration
-    (charm > 0), un call OTM en perd (charm < 0). C'est ce flux mécanique que
-    les dealers doivent hedger, d'où les dérives de fin de séance.
-    """
+    """Delta decay from the passage of time, using trader convention."""
     d1, d2 = _d1_d2(s, k, t, r, sigma)
     t = np.maximum(np.asarray(t, dtype=float), _EPS)
     sigma = np.maximum(np.asarray(sigma, dtype=float), _EPS)
@@ -95,17 +80,12 @@ def charm(s, k, t, r, sigma):
 
 
 def charm_per_day(s, k, t, r, sigma):
-    """Variation de delta pour une journée écoulée."""
+    """Delta change over one elapsed day."""
     return charm(s, k, t, r, sigma) / 365.0
 
 
 def implied_vol(price, s, k, t, r, is_call, tol=1e-6, max_iter=60):
-    """IV par Newton-Raphson vectorisé (fallback bisection implicite via clip).
-
-    Retourne NaN quand le prix est sous la valeur intrinsèque actualisée ou
-    quand la convergence échoue — l'appelant exclut ces contrats comme les
-    iv<=0 du feed live.
-    """
+    """Solve implied volatility with vectorized Newton-Raphson iterations."""
     price = np.asarray(price, dtype=float)
     s = np.broadcast_to(np.asarray(s, dtype=float), price.shape).copy()
     k = np.broadcast_to(np.asarray(k, dtype=float), price.shape).copy()

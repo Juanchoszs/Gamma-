@@ -1,10 +1,4 @@
-"""Serveur MCP local : expose les données GEX calculées à Claude Code.
-
-Lit les Parquet écrits par le dashboard (processus séparé) — le dashboard
-doit tourner (ou avoir tourné) pour que les données existent.
-
-Enregistrement : voir .mcp.json à la racine du projet.
-"""
+"""GEX dashboard application."""
 from __future__ import annotations
 
 import json
@@ -31,20 +25,14 @@ def _latest_snapshot_path(symbol: str) -> Path | None:
 
 
 def _preferred_symbol(symbol: str) -> str:
-    """Clé à lire : la native (dxFeed) si elle a des données, CBOE sinon.
-
-    Même règle que l'interface (cf. app.chain_state) : sans cela les outils
-    MCP répondaient sur la source délayée alors qu'une source temps réel
-    existait — deux vérités différentes pour la même question selon qu'on
-    regarde l'écran ou qu'on interroge Claude.
-    """
+    """Choose the real-time symbol when fresh native data is available."""
     key = f"{symbol}_RT"
     path = SETTINGS.data_dir / "history" / "metrics.parquet"
     if not path.exists():
         return symbol
     try:
         df = pd.read_parquet(path, columns=["symbol"])
-    except Exception:  # noqa: BLE001 — un historique illisible n'est pas fatal ici
+    except Exception:
         return symbol
     return key if (df["symbol"] == key).any() else symbol
 
@@ -58,8 +46,7 @@ def _check_symbol(symbol: str) -> str:
 
 @mcp.tool()
 def get_gex_summary(symbol: str = "SPX") -> str:
-    """Dernières métriques de synthèse (GEX net, zero gamma, P/C ratios, spot)
-    pour un sous-jacent (SPX, NDX, SPY, QQQ), plus leur évolution sur la journée."""
+    """Return the latest summary metrics and their intraday change."""
     symbol = _preferred_symbol(_check_symbol(symbol))
     path = SETTINGS.data_dir / "history" / "metrics.parquet"
     if not path.exists():
@@ -82,8 +69,7 @@ def get_gex_summary(symbol: str = "SPX") -> str:
 
 @mcp.tool()
 def get_gex_by_strike(symbol: str = "SPX", top_n: int = 15) -> str:
-    """Les top_n strikes par |GEX| du dernier snapshot — les murs de gamma.
-    Colonnes : strike, GEX net ($), côté dominant (calls/puts), open interest."""
+    """Return the strongest gamma walls from the latest snapshot."""
     symbol = _preferred_symbol(_check_symbol(symbol))
     path = _latest_snapshot_path(symbol)
     if path is None:
@@ -107,20 +93,7 @@ def get_gex_by_strike(symbol: str = "SPX", top_n: int = 15) -> str:
 
 
 def _vix_context() -> dict | None:
-    """VIX en direct via dxFeed si un compte courtier est configuré ET que
-    l'abonnement inclut ce ticker (`QUOTES.price` renvoie None sinon, repli
-    silencieux) — sinon le pull délayé CBOE (scheduler.pull_vix, ~15 min,
-    cadence 10 min). La variation du jour reste calculée depuis l'historique
-    délayé (seule série qui date un "premier point du jour") même quand le
-    dernier niveau vient du direct : approximation assumée, pas une vraie
-    variation intraday tick à tick.
-
-    Le flux public/démo (celui du repli NQ/ES, cf. PublicDelayedQuotes) n'a
-    volontairement PAS été étendu à VIX : testé hors séance, son dernier
-    print datait pile de l'heure de clôture (MARKET_CLOSE) — cote arrêtée,
-    pas un flux en retard. Sa latence réelle EN séance reste à vérifier avant
-    de l'utiliser comme repli gratuit ici ; ne pas réinterpréter cette note
-    comme "flux non fiable" sans nouveau test pendant les heures de marché."""
+    """Return live VIX context, falling back to delayed CBOE data."""
     vix_hist = store.load_index_spot("vix")
     day_open = None
     delayed_last = None
@@ -152,16 +125,7 @@ def _vix_context() -> dict | None:
 
 @mcp.tool()
 def get_market_context(symbol: str = "SPX") -> str:
-    """Vue d'ensemble condensée d'un sous-jacent : régime gamma (frein/
-    accélération, cf. metrics.regime_read), position du spot par rapport au
-    Zero Gamma, murs de gamma les plus proches (au-dessus et en-dessous du
-    spot), P/C ratio, et VIX (dernier niveau + variation du jour) en
-    confluence. Pensé pour éviter d'enchaîner get_gex_summary +
-    get_gex_by_strike + une lecture VIX séparée sur une question du type
-    « le contexte est-il propice à une journée directionnelle ? ».
-
-    Ne renvoie ni probabilité de scénario ni recommandation de position —
-    uniquement des données calculées, à interpréter, jamais un signal."""
+    """Return a concise gamma, delta, wall, and VIX market overview."""
     symbol = _preferred_symbol(_check_symbol(symbol))
     metrics_path = SETTINGS.data_dir / "history" / "metrics.parquet"
     if not metrics_path.exists():
@@ -210,9 +174,7 @@ def get_market_context(symbol: str = "SPX") -> str:
 
 @mcp.tool()
 def get_flow_delta(symbol: str = "SPX", day: str | None = None) -> str:
-    """Flux delta options intraday (proxy Δvolume×δ, barres ~1 min, délayé 15 min).
-    day au format YYYY-MM-DD, défaut aujourd'hui. Retourne les dernières 30 barres
-    et le cumul du jour."""
+    """Return recent intraday option delta flow and daily totals."""
     symbol = _check_symbol(symbol)
     day = day or datetime.now(ET).strftime("%Y-%m-%d")
     path = SETTINGS.data_dir / "flows" / symbol / f"{day}.parquet"
@@ -233,8 +195,7 @@ def get_flow_delta(symbol: str = "SPX", day: str | None = None) -> str:
 
 @mcp.tool()
 def get_history(symbol: str = "SPX", last_n: int = 50) -> str:
-    """Historique des métriques de synthèse (une ligne par snapshot ~10 min) :
-    spot, GEX net, zero gamma, P/C ratios. Pour analyser l'évolution du régime."""
+    """Return recent summary-metric history for an underlying."""
     symbol = _preferred_symbol(_check_symbol(symbol))
     path = SETTINGS.data_dir / "history" / "metrics.parquet"
     if not path.exists():
@@ -247,17 +208,14 @@ def get_history(symbol: str = "SPX", last_n: int = 50) -> str:
 
 @mcp.tool()
 def get_reports(last_n: int = 5) -> str:
-    """Derniers rapports des tâches planifiées (backfills, vérifications) écrits
-    dans logs/reports.md. À consulter pour savoir ce qui s'est passé pendant une
-    exécution automatique, dont la sortie vit dans une conversation séparée."""
+    """Return the latest scheduled-task reports."""
     from .logsetup import read_reports
     return read_reports(last_n)
 
 
 @mcp.tool()
 def get_log_tail(lines: int = 50, level: str | None = None) -> str:
-    """Fin du log technique (logs/gex.log) : pulls CBOE, erreurs, backfills.
-    level optionnel pour filtrer (ex. 'ERROR', 'WARNING')."""
+    """Return the tail of the technical log, optionally filtered by level."""
     from .logsetup import LOG_FILE
     if not LOG_FILE.exists():
         return "Aucun log (le dashboard n'a pas encore tourné avec la journalisation)."
@@ -268,7 +226,7 @@ def get_log_tail(lines: int = 50, level: str | None = None) -> str:
 
 
 def main() -> None:
-    """Entrée de la commande ``gex-mcp`` (équivaut à ``python -m gex.mcp_server``)."""
+    """Run the application."""
     mcp.run()
 
 

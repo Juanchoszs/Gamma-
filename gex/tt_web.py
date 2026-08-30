@@ -1,26 +1,4 @@
-"""Connexion tastytrade depuis le dashboard, sans copier-coller.
-
-Remplace la gymnastique de `python -m gex.tt_auth` (ouvrir une URL, atterrir
-sur une page d'erreur, recopier le `code=` de la barre d'adresse, puis `setx`)
-par deux clics : « Connecter », approuver.
-
-Ce qui rend ça possible : l'URI de redirection enregistrée côté tastytrade est
-`http://localhost:8050/oauth/callback`, donc le navigateur revient sur le
-dashboard lui-même — qui peut alors lire le code et faire l'échange.
-
-⚠️ Portée. Ces routes ne servent QUE l'autorisation, en scope `read`. Ce
-serveur n'écoute qu'en local (cf. gex/api.py) et le projet n'exécute aucun
-ordre : un jeton obtenu ici ne peut pas trader, par construction.
-
-Sécurité de l'échange :
-- un `state` aléatoire à usage unique est vérifié au retour. Sans lui, une
-  page tierce pourrait déclencher notre callback avec SON code
-  d'autorisation, et le dashboard enregistrerait le jeton de quelqu'un
-  d'autre (« OAuth code injection ») ;
-- le `code` et le `client_secret` ne transitent que vers l'API tastytrade ;
-- le refresh token obtenu n'est jamais affiché ni journalisé, seulement
-  rangé là où `rtquote._env` le lit déjà (cf. tt_auth.store_refresh).
-"""
+"""Handle tastytrade OAuth authorization from the dashboard."""
 from __future__ import annotations
 
 import logging
@@ -34,17 +12,14 @@ from .rtquote import credentials_present
 
 log = logging.getLogger(__name__)
 
-# `state` en attente, à usage unique. Un dict plutôt qu'une valeur simple :
-# rien n'interdit à l'utilisateur de cliquer deux fois puis de terminer la
-# première autorisation. Borné pour ne pas croître indéfiniment si des
-# tentatives sont abandonnées.
+# Pending one-time OAuth states, bounded to abandoned attempts.
 _PENDING: dict[str, float] = {}
 _PENDING_LOCK = threading.Lock()
 _MAX_PENDING = 8
 
 
 def _page(titre: str, message: str, ok: bool) -> str:
-    """Page de retour minimale, aux couleurs du dashboard."""
+    """Render a minimal dashboard-styled callback page."""
     couleur = "#22c55e" if ok else "#ef4444"
     return f"""<!doctype html><html lang="fr"><head><meta charset="utf-8">
 <title>{titre}</title></head>
@@ -66,8 +41,7 @@ def _remember_state() -> str:
     state = secrets.token_urlsafe(24)
     with _PENDING_LOCK:
         if len(_PENDING) >= _MAX_PENDING:
-            # purge le plus ancien : une tentative abandonnée ne doit pas
-            # bloquer les suivantes
+            # Remove the oldest attempt so abandoned flows do not block new ones.
             plus_vieux = min(_PENDING, key=_PENDING.get)
             _PENDING.pop(plus_vieux, None)
         _PENDING[state] = time.time()
@@ -75,8 +49,7 @@ def _remember_state() -> str:
 
 
 def _consume_state(state: str | None) -> bool:
-    """Vrai si le state était bien en attente. À usage unique : un même state
-    ne peut pas servir deux fois."""
+    """Consume a pending state and reject reuse."""
     if not state:
         return False
     with _PENDING_LOCK:
@@ -84,12 +57,7 @@ def _consume_state(state: str | None) -> bool:
 
 
 def connection_status() -> tuple[str, str]:
-    """(état, message) de la connexion courtier, pour l'affichage.
-
-    `credentials_present` exige les trois valeurs : sans identifiants d'appli,
-    il n'y a même pas de quoi lancer une autorisation — le message doit dire
-    laquelle manque plutôt qu'un « non connecté » indifférencié.
-    """
+    """Return the broker connection state and display message."""
     from .rtquote import _env
 
     cid = _env("TASTYTRADE_CLIENT_ID")
@@ -127,7 +95,7 @@ def register_oauth(app) -> None:
     def _oauth_callback():
         erreur = request.args.get("error")
         if erreur:
-            # refus explicite côté tastytrade : ce n'est pas une panne
+            # An explicit authorization denial is not a service failure.
             return _page("Autorisation refusée",
                          f"tastytrade a renvoyé : {erreur}. "
                          "Rien n'a été enregistré.", ok=False), 400
@@ -165,7 +133,6 @@ def register_oauth(app) -> None:
                          ok=False), 502
 
         note = tt_auth.store_refresh(refresh)
-        # le jeton lui-même n'est JAMAIS journalisé
         log.info("OAuth tastytrade : connexion réussie. %s", note)
         _demarrer_les_flux()
         return _page("Connecté à tastytrade",
@@ -174,12 +141,7 @@ def register_oauth(app) -> None:
 
 
 def _demarrer_les_flux() -> None:
-    """Démarre les flux qui refusaient de tourner faute d'identifiants.
-
-    Sans cela, il faudrait redémarrer le dashboard juste après s'être
-    connecté — ce qui reviendrait à remplacer un copier-coller par un
-    redémarrage. `start()` est idempotent des deux côtés.
-    """
+    """Start data streams that were waiting for broker credentials."""
     try:
         if credentials_present():
             from .flowtape import TAPE

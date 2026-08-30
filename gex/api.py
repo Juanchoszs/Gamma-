@@ -1,19 +1,16 @@
-"""API JSON minimale, en lecture seule, greffée sur le serveur Flask que Dash
-utilise déjà (`app.server`) — pour qu'un outil externe (indicateur de
-charting, script) tournant SUR LA MÊME MACHINE puisse lire l'état courant
-sans passer par l'interface.
+"""Minimal read-only JSON API attached to Dash's existing Flask server
+(`app.server`), allowing an external tool (charting indicator or script) on the
+SAME MACHINE to read current state without using the interface.
 
-⚠️ Portée de la licence — à ne pas confondre avec `gex.export` (qui, lui,
-prépare un export destiné à être PARTAGÉ avec d'autres personnes, et filtre
-donc sur `source == "cboe"` uniquement). Ici, c'est différent : ce flux sert
-TOUTES les données disponibles, y compris celles issues d'un compte courtier
-(dxFeed) — parce que la licence « usage personnel, non redistribuable »
-autorise le titulaire du compte à utiliser SES PROPRES données dans SES
-PROPRES outils (un indicateur de charting local, par exemple). Ce qu'elle
-interdit, c'est de les REDISTRIBUER À DES TIERS — quelqu'un d'autre, sans son
-propre compte, qui consommerait ce flux à distance. D'où la limite réelle à
-respecter : ce serveur ne doit pas être exposé au-delà de la machine locale
-(pas de port forwarding, pas d'écoute sur 0.0.0.0 ouverte à l'extérieur).
+⚠️ License scope — do not confuse this with `gex.export`, which prepares an
+export intended to be SHARED and therefore filters to `source == "cboe"`.
+This stream is different: it serves ALL available data, including broker
+account data (dxFeed), because a “personal use, non-redistributable” license
+allows the account holder to use THEIR OWN data in THEIR OWN tools (for
+example, a local charting indicator). It prohibits REDISTRIBUTING THAT DATA TO
+THIRD PARTIES—someone else without their own account consuming this stream
+remotely. Therefore this server must not be exposed beyond the local machine
+(no port forwarding or external listening on 0.0.0.0).
 """
 from __future__ import annotations
 
@@ -44,34 +41,33 @@ def _summary_dict(symbol: str, s) -> dict:
     }
 
 
-# Seuil (points) au-delà duquel un retournement compte comme un « vrai »
-# retracement, par instrument. Sert au comptage n_reversals — première version
-# volontairement simple, recalculable plus tard depuis les bougies brutes.
+# Point threshold beyond which a reversal counts as a “true” retracement, per
+# instrument. Used for n_reversals; intentionally simple and recalculable later
+# from raw bars.
 _REV_THRESHOLD = {"NQ": 30.0, "ES": 8.0, "SPX": 10.0, "NDX": 40.0,
                   "SPY": 1.0, "QQQ": 1.2}
 
 
 def _count_reversals(closes, threshold: float) -> int:
-    """Compte les retournements de la série de clôtures dépassant `threshold`.
+    """Count reversals in the closing-price series exceeding `threshold`.
 
-    Zigzag : on suit le plus haut et le plus bas depuis le dernier pivot ; un
-    reflux de `threshold` depuis l'extrême marque un pivot. Le tout PREMIER
-    mouvement (celui qui établit la tendance de départ) ne compte pas comme un
-    retournement — seuls les changements de sens suivants comptent. Mesure
-    objective de « combien de fois le marché s'est retourné », indépendante de
-    la perception du trader.
+    Zigzag: track the high and low since the last pivot; a reversal of
+    `threshold` from an extreme marks a pivot. The FIRST move establishing the
+    initial trend does not count; only subsequent direction changes count.
+    This objectively measures how many times the market reversed, independent
+    of trader perception.
     """
     if not closes:
         return 0
-    n, direction = 0, 0            # direction : 0 inconnue, +1 haussier, -1 baissier
+    n, direction = 0, 0            # 0 unknown, +1 rising, -1 falling
     hi = lo = closes[0]
     for c in closes:
         hi, lo = max(hi, c), min(lo, c)
-        if direction >= 0 and hi - c >= threshold:        # reflux depuis le haut
-            if direction == 1:                            # on tendait à la hausse -> vrai retournement
+        if direction >= 0 and hi - c >= threshold:        # reversal from a high
+            if direction == 1:                            # rising trend -> true reversal
                 n += 1
             direction, hi, lo = -1, c, c
-        elif direction <= 0 and c - lo >= threshold:      # rebond depuis le bas
+        elif direction <= 0 and c - lo >= threshold:      # rebound from a low
             if direction == -1:
                 n += 1
             direction, hi, lo = 1, c, c
@@ -79,12 +75,12 @@ def _count_reversals(closes, threshold: float) -> int:
 
 
 def _session_context(symbol: str, day: str, rev_threshold: float | None = None) -> dict:
-    """Vérité de marché OBJECTIVE d'une séance, calculée depuis les bougies
-    1 min stockées (`store.load_prices`). Sert au journal de recherche : ce qui
-    s'est réellement passé, à confronter au ressenti du sondage.
+    """OBJECTIVE market truth for a session, calculated from stored 1-minute
+    bars (`store.load_prices`). Used by the research log to compare what really
+    happened with survey perception.
 
-    Fonctionne en intraday (bougies partielles du jour) comme en fin de séance.
-    Renvoie `available: False` si aucune bougie n'existe pour ce symbole/jour.
+    Works intraday (partial bars for the day) and at session end. Returns
+    `available: False` when no bar exists for this symbol and day.
     """
     from datetime import date as _date, timedelta
 
@@ -101,7 +97,7 @@ def _session_context(symbol: str, day: str, rev_threshold: float | None = None) 
     lo = float(bars["low"].min())
     last = float(bars["close"].iloc[-1])
 
-    # clôture de la veille + ATR (moyenne des ranges quotidiens sur ~14 jours)
+    # Prior close and ATR (average daily range over about 14 days).
     prev_close, ranges = None, []
     probe = d
     for _ in range(20):
@@ -135,15 +131,15 @@ def _session_context(symbol: str, day: str, rev_threshold: float | None = None) 
 
 
 def _close_context(symbol: str, day: str) -> dict:
-    """Pinning de clôture d'une séance : le prix s'est-il collé sur un strike /
-    un mur GEX à 16h ET ? Calcul DÉRIVÉ à la demande depuis le brut (snapshot de
-    chaîne ~16h + bougies), rien n'est stocké. `available: False` si les sources
-    manquent (chaîne ou bougies)."""
+    """Session-close pinning: did price stick to a strike/GEX wall at 16:00 ET?
+    Derived on demand from raw data (around-16:00 chain snapshot and bars);
+    nothing is stored. Returns `available: False` if either source is missing.
+    """
     from . import pinning, store
 
     out = {"symbol": symbol, "date": day, "available": False}
 
-    # Chaîne la plus proche de 16h ET : natif (_RT) prioritaire, sinon CBOE.
+    # Chain closest to 16:00 ET: native (_RT) first, then CBOE.
     chain = None
     for key in (f"{symbol}_RT", symbol):
         chain = store.load_snapshot_near(key, day)
@@ -162,7 +158,7 @@ def _close_context(symbol: str, day: str) -> dict:
     ts = pd.to_datetime(bars["timestamp"])
     close_price = float(bars["close"].iloc[(ts - target).abs().values.argmin()])
 
-    # Fenêtre pré-clôture 15h50-16h00 ET (franchissements de strike).
+    # Pre-close window, 15:50–16:00 ET (strike crossings).
     window = bars[(ts.dt.time >= dt_time(15, 50)) & (ts.dt.time <= dt_time(16, 0))]
     window_closes = [float(c) for c in window["close"].tolist()] or None
 
@@ -173,11 +169,12 @@ def _close_context(symbol: str, day: str) -> dict:
 
 def _tick_context(symbol: str, day: str, entry: float | None = None,
                   stop: float | None = None, direction: int = 1) -> dict:
-    """Fenêtre de clôture à la résolution du TICK (brut capturé 15h45-16h05 ET).
+    """Tick-resolution close window (raw capture from 15:45–16:05 ET).
 
-    Métriques d'excursion avant/après la clôture, et — si `entry`/`stop` sont
-    fournis — le rejeu « un stop aurait-il sauté ? ». `available: False` si aucun
-    tick n'a été capturé ce jour-là (capture = compte courtier requis)."""
+    Provides excursion metrics before/after the close and, when `entry`/`stop`
+    are supplied, replays whether a stop would have been hit. Returns
+    `available: False` when no ticks were captured (broker account required).
+    """
     from . import store, tickstats
 
     ticks = store.load_ticks(symbol, day)
@@ -194,9 +191,10 @@ def _tick_context(symbol: str, day: str, entry: float | None = None,
 
 
 def _preferred(symbol: str) -> str:
-    """Clé de STATE à lire : la chaîne native _RT si un compte est configuré et
-    qu'elle a un état, sinon le symbole de base — même règle que l'interface
-    (app.chain_state) pour que l'API montre ce que le dashboard montre."""
+    """Return the STATE key to read: native _RT when configured and populated,
+    otherwise the base symbol. This matches the interface's `app.chain_state`
+    rule so the API shows what the dashboard shows.
+    """
     from .rtquote import credentials_present
     if symbol in ("SPX", "NDX", "SPY", "QQQ") and credentials_present():
         rt = STATE.get(f"{symbol}_RT")
@@ -207,8 +205,7 @@ def _preferred(symbol: str) -> str:
 
 
 def _current_summary(symbol: str):
-    """(summary, enriched) pour ce symbole, quelle que soit la source — cf.
-    docstring du module sur la portée réelle de la licence."""
+    """Return `(summary, enriched)` for this symbol, regardless of source."""
     st = STATE.get(_preferred(symbol))
     with STATE.lock:
         s, df = st.summary, st.enriched
@@ -218,16 +215,12 @@ def _current_summary(symbol: str):
 
 
 def register_api(app) -> None:
-    """`app` : l'instance Dash (on grimpe à `.server`) ou directement une
-    instance Flask — pratique pour les tests, qui n'ont pas besoin de monter
-    tout le dashboard."""
+    """Register on a Dash app (using `.server`) or directly on a Flask app."""
     server: Flask = app.server if hasattr(app, "server") else app
 
     @server.after_request
     def _cors(resp):
-        # CORS large parce que le risque visé est différent de celui d'un
-        # site web classique : ce serveur n'écoute qu'en local (cf. docstring
-        # du module) — le vrai garde-fou est là, pas dans l'en-tête CORS.
+        # This server is local-only; that is the actual safeguard, not CORS.
         resp.headers["Access-Control-Allow-Origin"] = "*"
         return resp
 
@@ -255,9 +248,9 @@ def register_api(app) -> None:
         s, df = _current_summary(symbol)
         if s is None or df is None:
             return jsonify({"error": "indisponible (pas encore de premier pull)"}), 404
-        # Source UNIQUE des niveaux (cf. metrics.compute_levels) : mêmes murs que
-        # le dashboard. structural_spot = clôture veille (magnitude), live_spot =
-        # spot courant en séance (côté). `?bucket=` fixe le périmètre d'échéances.
+        # Single level source (metrics.compute_levels): same walls as the
+        # dashboard. structural_spot is prior close (magnitude); live_spot is
+        # the current session spot (side). `?bucket=` selects expiries.
         from .app import market_is_open, ref_spot as _ref_spot
         bucket = request.args.get("bucket", "0DTE")
         if bucket not in EXPIRY_BUCKETS:
@@ -268,9 +261,8 @@ def register_api(app) -> None:
         levels, keys = res["levels"], res["keys"]
         hvl = metrics.zero_gamma(df, s.spot, weight_col="volume")
 
-        # Transposition d'échelle optionnelle : ?scale=NQ exprime les niveaux
-        # NDX en prix NQ (cf. app._transform_for / le sélecteur d'unité). Utile
-        # quand on trade le future mais que les niveaux viennent de l'indice.
+        # Optional scale conversion: ?scale=NQ expresses NDX levels in NQ
+        # prices, useful when trading the future using index-derived levels.
         scale = request.args.get("scale")
         xf = (lambda v: v)
         if scale and scale.upper() != symbol:
@@ -328,11 +320,11 @@ def register_api(app) -> None:
 
     @server.route("/api/v1/<symbol>/session_context")
     def _session(symbol):
-        """Vérité de marché objective d'une séance (OHLC, gap, ATR veille,
-        excursions, retournements) — pour le journal de recherche.
+        """Objective session market truth (OHLC, gap, prior ATR, excursions,
+        reversals) for the research log.
 
-        `?date=YYYY-MM-DD` (défaut : jour ET courant). `?rev=` force le seuil de
-        retournement. En intraday, renvoie l'état courant (bougies partielles).
+        `?date=YYYY-MM-DD` (default: current ET day). `?rev=` overrides the
+        reversal threshold. Intraday, returns the current state (partial bars).
         """
         symbol = symbol.upper()
         day = request.args.get("date") or datetime.now(ET).date().isoformat()
@@ -341,17 +333,18 @@ def register_api(app) -> None:
 
     @server.route("/api/v1/<symbol>/close_context")
     def _close(symbol):
-        """Pinning de clôture (16h ET) : distance au strike/mur GEX, pin_ratio,
-        franchissements pré-clôture — calcul à la demande, pour le backtest du
-        comportement de clôture. `?date=YYYY-MM-DD` (défaut : jour ET courant)."""
+        """Close pinning at 16:00 ET: distance to strike/GEX wall, pin ratio,
+        and pre-close crossings. `?date=YYYY-MM-DD` defaults to the current ET day.
+        """
         symbol = symbol.upper()
         day = request.args.get("date") or datetime.now(ET).date().isoformat()
         return jsonify(_close_context(symbol, day))
 
     @server.route("/api/v1/<symbol>/tick_context")
     def _tick(symbol):
-        """Fenêtre de clôture au tick. `?date=` ; `?entry=&stop=&dir=long|short`
-        pour rejouer « un stop aurait-il sauté ? »."""
+        """Tick close window. `?date=`; `?entry=&stop=&dir=long|short` replays
+        whether a stop would have been hit.
+        """
         symbol = symbol.upper()
         day = request.args.get("date") or datetime.now(ET).date().isoformat()
         entry = request.args.get("entry", type=float)
@@ -361,7 +354,7 @@ def register_api(app) -> None:
 
     @server.route("/api/v1/vix")
     def _vix():
-        """VIX courant + seuil du digest (pour une interrogation directe)."""
+        """Current VIX and digest threshold."""
         from . import digest as digest_mod
         v = digest_mod._current_vix()
         if v is None:
@@ -373,11 +366,10 @@ def register_api(app) -> None:
 
     @server.route("/api/v1/digest")
     def _digest():
-        """Verdict d'état du gamma prêt à diffuser (cf. gex/digest.py).
+        """Gamma-state verdict ready for distribution (see gex/digest.py).
 
-        C'est ce qu'un bot Discord consomme : le texte, la couleur, et la
-        `signature` de régime (pour ne re-poster que sur un vrai changement).
-        Renvoie une analyse dérivée, jamais la chaîne brute.
+        A Discord bot consumes the text, color, and regime `signature` (to post
+        only on a real change). Returns derived analysis, never the raw chain.
         """
         from . import digest as digest_mod
         d = digest_mod.current_digest()

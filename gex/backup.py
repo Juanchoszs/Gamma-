@@ -1,27 +1,25 @@
-"""Sauvegarde de data/ vers un stockage distant via rclone.
+"""Back up data/ to remote storage through rclone.
 
-Complète le dépôt git de données, qui ne peut pas tout porter : GitHub rejette
-tout fichier de plus de 100 Mo, or les archives Databento en dépassent. rclone
-n'a pas cette limite et parle indifféremment à Drive, OneDrive, B2 ou S3.
+This complements the data repository, which cannot hold everything: GitHub
+rejects files over 100 MB, while Databento archives exceed that limit. rclone
+has no such limit and supports Drive, OneDrive, B2, and S3 alike.
 
-Deux choix de conception :
+Two design choices:
 
-**`copy` et non `sync`.** rclone `sync` reflète les suppressions locales sur le
-distant ; une erreur de manipulation effacerait donc la sauvegarde. `copy`
-ajoute et met à jour, sans jamais supprimer — le comportement qu'on attend
-d'une sauvegarde.
+**`copy`, not `sync`.** rclone `sync` mirrors local deletions remotely, so a
+mistake could erase the backup. `copy` adds and updates without deleting,
+which is the expected backup behavior.
 
-**Programmée, jamais continue.** Un client de synchronisation de bureau
-re-téléverserait le fichier de prix du jour à chaque écriture, soit toutes les
-30 secondes et par symbole. Une passe quotidienne après la clôture évite ce
-gaspillage.
+**Scheduled, never continuous.** A desktop sync client would re-upload the
+current day's price file on every write—every 30 seconds per symbol. A daily
+run after the close avoids this waste.
 
-Configuration préalable (une fois, dans un terminal) :
+One-time terminal setup:
 
     rclone config
 
-Créer un remote nommé `gexbackup` — l'autorisation passe par le navigateur.
-Vérifier ensuite avec `python -m gex.backup --check`.
+Create a remote named `gexbackup`; authorization happens in the browser.
+Verify it with `python -m gex.backup --check`.
 """
 from __future__ import annotations
 
@@ -37,8 +35,8 @@ log = logging.getLogger(__name__)
 REMOTE = "gexbackup"
 REMOTE_PATH = "gex-data"
 
-# Le dépôt git local est déjà répliqué sur GitHub : le copier ferait doublon,
-# pour un contenu compressé qui se re-téléverse mal.
+# The local git repository is already mirrored on GitHub; copying it would
+# duplicate compressed content that re-uploads poorly.
 EXCLUDES = [".git/**", "*.tmp", "*.lock"]
 
 
@@ -61,13 +59,13 @@ def remote_configured(remote: str = REMOTE) -> bool:
 def build_command(remote: str = REMOTE, dry_run: bool = False) -> list[str]:
     exe = rclone_path() or "rclone"
     cmd = [exe, "copy", str(SETTINGS.data_dir), f"{remote}:{REMOTE_PATH}",
-           # les Parquet sont déjà compressés : vérifier la taille et la date
-           # suffit, et évite de relire des centaines de Mo pour rien
+           # Parquet files are already compressed; size-only avoids rereading
+           # hundreds of megabytes unnecessarily.
            "--size-only",
            "--transfers", "4",
            "--checkers", "8",
-           # Drive limite le débit de requêtes ; au-delà rclone se fait
-           # étrangler et la passe s'éternise
+           # Drive limits request throughput; exceeding it throttles rclone
+           # and makes the run drag on.
            "--tpslimit", "10",
            "--retries", "3",
            "--stats", "30s",
@@ -81,10 +79,10 @@ def build_command(remote: str = REMOTE, dry_run: bool = False) -> list[str]:
 
 
 def run(remote: str = REMOTE, dry_run: bool = False) -> bool:
-    """Lance la sauvegarde. Renvoie True si elle s'est terminée proprement.
+    """Run the backup. Return True if it completed successfully.
 
-    Ne lève jamais : appelée depuis le planificateur, une sauvegarde ratée ne
-    doit pas interrompre la collecte.
+    Never raise: this is called by the scheduler, and a failed backup must not
+    interrupt data collection.
     """
     if not rclone_path():
         log.warning("rclone introuvable — sauvegarde ignorée")

@@ -8,7 +8,13 @@ from .models import (
     DataQuality,
     MarketDataState,
 )
-from .quality import DataQualityEvaluator, evaluate_data_quality
+from .quality import (
+    DataQualityEvaluator,
+    DataQualityConfig,
+    ProviderQualityConfig,
+    evaluate_data_quality,
+    get_quality_config,
+)
 from .market_state import (
     MarketDataState as MarketStateEnum,
     MarketStateContext,
@@ -23,6 +29,9 @@ __all__ = [
     "DataQuality",
     "DataQualityEvaluator",
     "evaluate_data_quality",
+    "DataQualityConfig",
+    "ProviderQualityConfig",
+    "get_quality_config",
     "MarketDataState",
     "MarketStateContext",
     "resolve_market_state",

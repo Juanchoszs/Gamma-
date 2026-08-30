@@ -1,18 +1,4 @@
-"""Autorisation OAuth2 tastytrade — à exécuter UNE FOIS.
-
-Le SDK tastytrade s'authentifie avec un refresh token de longue durée, qu'il
-échange contre des access tokens courts. Ce module réalise l'étape initiale
-(authorization code -> refresh token), qui exige une approbation navigateur.
-
-Usage :
-    python -m gex.tt_auth
-
-Le script affiche une URL à ouvrir, tu approuves, ton navigateur est redirigé
-vers https://localhost:8050/oauth/callback (page d'erreur attendue : rien
-n'écoute en HTTPS sur ce port). Le paramètre `code=` de la barre d'adresse est
-à recoller ici. Le refresh token obtenu est ensuite à stocker en variable
-d'environnement TT_REFRESH.
-"""
+"""Perform the one-time tastytrade OAuth2 authorization flow."""
 from __future__ import annotations
 
 import os
@@ -23,21 +9,14 @@ import requests
 
 AUTH_URL = "https://my.tastytrade.com/auth.html"
 TOKEN_URL = "https://api.tastyworks.com/oauth/token"
-# HTTP et non HTTPS : le dashboard sert en clair sur 127.0.0.1, donc c'est la
-# SEULE forme que son navigateur puisse réellement atteindre. tastytrade
-# n'exige HTTPS que pour les URI publiques et accepte http sur localhost, ce
-# qui permet de récupérer le code automatiquement (cf. gex/tt_web.py) au lieu
-# de le faire recopier depuis une page d'erreur.
+# Use HTTP because the local dashboard is served without TLS.
 REDIRECT_URI = "http://localhost:8050/oauth/callback"
-# Lecture seule, volontairement : ce projet n'exécute pas d'ordres et n'a
-# aucune raison de demander le scope "trade" (cf. README, « analyse
-# uniquement »). Un jeton qui ne peut pas trader ne peut pas mal trader.
+# Read-only scope: this project does not execute orders.
 SCOPE = "read"
 
 
 def _env(name: str) -> str | None:
-    """Variable d'environnement, avec repli sur le registre utilisateur Windows
-    (une session ouverte avant `setx` ne voit pas la nouvelle valeur)."""
+    """Read an environment variable, falling back to the Windows user registry."""
     val = os.environ.get(name)
     if not val and sys.platform == "win32":
         import winreg
@@ -61,13 +40,7 @@ def credentials() -> tuple[str, str]:
 
 
 def authorize_url(client_id: str, state: str | None = None) -> str:
-    """URL d'autorisation à ouvrir dans le navigateur.
-
-    `state` : jeton anti-CSRF, renvoyé tel quel par tastytrade sur la
-    redirection. Le vérifier empêche qu'une page tierce fasse aboutir SON code
-    d'autorisation sur notre callback — ce qui enregistrerait le jeton de
-    quelqu'un d'autre à la place du tien.
-    """
+    """Return the browser authorization URL."""
     params = {
         "client_id": client_id,
         "redirect_uri": REDIRECT_URI,
@@ -80,17 +53,7 @@ def authorize_url(client_id: str, state: str | None = None) -> str:
 
 
 def store_refresh(token: str) -> str:
-    """Enregistre le refresh token là où `rtquote._env` sait déjà le lire.
-
-    Sur Windows : variable d'environnement utilisateur (HKCU\\Environment),
-    c'est-à-dire exactement ce que faisait `setx` manuellement — aucun nouveau
-    mécanisme, aucun fichier de secret ajouté au dépôt. La valeur est aussi
-    posée dans `os.environ` du processus courant, sinon le dashboard ne la
-    verrait qu'après redémarrage (une session héritant de son environnement au
-    lancement).
-
-    Renvoie une phrase décrivant ce qui a été fait, à afficher à l'utilisateur.
-    """
+    """Store the refresh token in the location used by ``rtquote._env``."""
     os.environ["TT_REFRESH"] = token
     if sys.platform != "win32":
         return ("Jeton actif pour cette session. Pour le rendre permanent, "
