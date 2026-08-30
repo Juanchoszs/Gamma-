@@ -9,14 +9,14 @@ Convention GEX (SpotGamma "naive") :
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, date, time, timedelta
+from datetime import datetime, date, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
 
 from . import greeks, rates
-from .config import CONTRACT_MULTIPLIER, SETTINGS
+from .config import CONTRACT_MULTIPLIER, SETTINGS, DataQuality
 from .ingest import ChainSnapshot
 
 ET = ZoneInfo("America/New_York")
@@ -489,12 +489,14 @@ class SummaryMetrics:
     pc_oi: float
     pc_volume: float
     net_gex_0dte: float = 0.0
-    basis: float | None = None   # future front month - spot, suivi dans le temps
+    basis: float | None = None   # future front month - spot, tracked over time
     net_dex: float = 0.0
-    # Provenance de la ligne. Détermine ce qui peut être partagé : "cboe" =
-    # source publique gratuite, redistribuable ; "databento" = source payante
-    # sous licence d'usage personnel, NON redistribuable.
+    # Provenance of the row. Determines what can be shared: "cboe" =
+    # free public source, redistributable; "databento" = paid source
+    # under personal use license, NOT redistributable.
     source: str = "cboe"
+    data_quality: DataQuality = DataQuality.VALID
+    age_seconds: float | None = None
 
     def as_row(self) -> dict:
         return {
@@ -509,16 +511,38 @@ class SummaryMetrics:
             "basis": self.basis,
             "net_dex": self.net_dex,
             "source": self.source,
+            "data_quality": self.data_quality.value,
+            "age_seconds": self.age_seconds,
         }
 
 
 def summarize(snapshot: ChainSnapshot, df: pd.DataFrame,
               with_basis: bool = True) -> SummaryMetrics:
-    """with_basis=False pour les sous-jacents sans future associé (ETF) :
-    la parité call-put y mesurerait un simple report de dividendes, qu'il
-    serait trompeur de stocker sous le nom de « basis »."""
-    today = datetime.now(ET).date()
+    """with_basis=False for underlyings without associated future (ETF):
+    call-put parity would measure a simple dividend carry, which would be
+    misleading to store under the name 'basis'."""
+    now_et = datetime.now(ET)
+    today = now_et.date()
     ratios = put_call_ratios(df)
+
+    # Compute data age - handle timezone mismatch
+    age_seconds = None
+    if snapshot.fetched_at is not None:
+        # Ensure both datetimes are timezone-aware for subtraction
+        fetched_at = snapshot.fetched_at
+        if fetched_at.tzinfo is None:
+            # Assume UTC if naive (as per ingest.py which uses datetime.utcnow())
+            fetched_at = fetched_at.replace(tzinfo=timezone.utc)
+        age_seconds = (now_et - fetched_at).total_seconds()
+
+    # Determine data quality based on age and completeness
+    data_quality = _evaluate_data_quality(
+        age_seconds=age_seconds,
+        feed_timestamp=snapshot.feed_timestamp,
+        df=df,
+        source=snapshot.symbol,
+    )
+
     return SummaryMetrics(
         timestamp=snapshot.feed_timestamp,
         symbol=snapshot.symbol,
@@ -530,7 +554,39 @@ def summarize(snapshot: ChainSnapshot, df: pd.DataFrame,
         net_gex_0dte=float(df.loc[bucket_mask(df, "0DTE", today), "gex"].sum()),
         basis=futures_basis(df, snapshot.spot, today) if with_basis else None,
         net_dex=float(df["dex"].sum()),
+        data_quality=data_quality,
+        age_seconds=age_seconds,
     )
+
+
+def _evaluate_data_quality(
+    age_seconds: float | None,
+    feed_timestamp: datetime,
+    df: pd.DataFrame,
+    source: str,
+) -> DataQuality:
+    """Centralized data quality evaluation.
+
+    Args:
+        age_seconds: Seconds since data was fetched
+        feed_timestamp: Timestamp from the data provider
+        df: Enriched option chain DataFrame
+        source: Data source identifier
+
+    Returns:
+        DataQuality enum value
+    """
+    if age_seconds is None:
+        return DataQuality.INVALID
+
+    if age_seconds <= 30:
+        return DataQuality.VALID
+    elif age_seconds <= 120:
+        return DataQuality.WARNING
+    elif age_seconds <= 300:
+        return DataQuality.STALE
+    else:
+        return DataQuality.EXPIRED
 
 
 def regime_read(net_gex: float, net_dex: float,

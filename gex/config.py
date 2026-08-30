@@ -2,7 +2,42 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
+
+
+class DataQuality(Enum):
+    """Data quality states for market data and snapshots.
+
+    VALID       — Fresh, complete, structurally valid data
+    WARNING     — Usable but with limitations (e.g., delayed feed, partial chain)
+    STALE       — No recent update; latest known snapshot used but age is significant
+    EXPIRED     — Contract/expiration no longer valid for active analysis
+    INVALID     — Required data missing or structurally invalid
+    MISSING     — No measurement exists (distinct from zero)
+    """
+    VALID = "VALID"
+    WARNING = "WARNING"
+    STALE = "STALE"
+    EXPIRED = "EXPIRED"
+    INVALID = "INVALID"
+    MISSING = "MISSING"
+
+
+class MarketDataState(Enum):
+    """Explicit market data states for UI and API.
+
+    LIVE           — Data is current and actively updated
+    DELAYED        — Data is available but delayed
+    MARKET_CLOSED  — Market is closed; displayed info from latest valid snapshot
+    HISTORICAL     — User is viewing a historical snapshot
+    NO_DATA        — No valid market data available
+    """
+    LIVE = "LIVE"
+    DELAYED = "DELAYED"
+    MARKET_CLOSED = "MARKET_CLOSED"
+    HISTORICAL = "HISTORICAL"
+    NO_DATA = "NO_DATA"
 
 def _default_data_dir() -> Path:
     """data/ à la racine du dépôt si on tourne depuis les sources, sinon dans

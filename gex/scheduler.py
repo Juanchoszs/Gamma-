@@ -16,7 +16,7 @@ import pandas as pd
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from . import backup, flowtape, idxopt, metrics, rates, roll, store
-from .config import SETTINGS, UNDERLYINGS
+from .config import SETTINGS, UNDERLYINGS, DataQuality
 from .ingest import ChainSnapshot, fetch_chain, fetch_index_spot
 from .metrics import ET, SummaryMetrics
 from . import futopt
@@ -194,7 +194,7 @@ def push_data_repo() -> None:
 
 
 def build_native_summary(code: str, df: pd.DataFrame,
-                         now_et: datetime | None = None) -> tuple[ChainSnapshot, SummaryMetrics]:
+                          now_et: datetime | None = None) -> tuple[ChainSnapshot, SummaryMetrics]:
     """(ChainSnapshot, SummaryMetrics) à partir d'une chaîne native (futopt).
 
     Fonction pure : ne touche ni STATE ni le disque, donc testable sans
@@ -217,6 +217,7 @@ def build_native_summary(code: str, df: pd.DataFrame,
         feed_timestamp=now_et.replace(tzinfo=None),
         fetched_at=datetime.now(UTC), options=df,
     )
+    age_seconds = (now_et - snap.fetched_at).total_seconds()
     summary = SummaryMetrics(
         timestamp=snap.feed_timestamp, symbol=code, spot=spot,
         net_gex=float(df["gex"].sum()),
@@ -232,6 +233,8 @@ def build_native_summary(code: str, df: pd.DataFrame,
         # pas de "basis" : ce sont déjà des options sur LE future, pas un
         # indice à convertir vers un contrat qui lui serait associé
         basis=None, source="dxfeed",
+        data_quality=DataQuality.VALID,
+        age_seconds=age_seconds,
     )
     return snap, summary
 

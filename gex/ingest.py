@@ -1,17 +1,19 @@
-"""Ingestion des chaînes d'options depuis l'endpoint delayed CBOE.
+"""Ingestion of option chains from CBOE delayed endpoint.
 
-Endpoint non documenté officiellement : https://cdn.cboe.com/api/global/
-delayed_quotes/options/{symbol}.json (indices préfixés par "_").
-Un GET ramène la chaîne complète (bid/ask, IV, OI, volume, Greeks CBOE)
-plus le spot. Délai ~15 min à la source.
+Undocumented public endpoint: https://cdn.cboe.com/api/global/
+delayed_quotes/options/{symbol}.json (indices prefixed with "_").
+A GET returns the full chain (bid/ask, IV, OI, volume, CBOE Greeks)
+plus the spot. Delay ~15 min at source.
 """
 from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, date, timezone
 from zoneinfo import ZoneInfo
+
+from .config import DataQuality
 
 _ET = ZoneInfo("America/New_York")
 
@@ -24,17 +26,19 @@ log = logging.getLogger(__name__)
 
 BASE_URL = "https://cdn.cboe.com/api/global/delayed_quotes/options/{sym}.json"
 
-# Symbole OCC : ROOT + YYMMDD + C/P + strike*1000 sur 8 chiffres.
+# OCC symbol: ROOT + YYMMDD + C/P + strike*1000 in 8 digits.
 OCC_RE = re.compile(r"^(?P<root>.+?)(?P<exp>\d{6})(?P<cp>[CP])(?P<strike>\d{8})$")
 
 
 @dataclass
 class ChainSnapshot:
-    symbol: str                 # clé interne ("SPX")
+    symbol: str                 # internal key ("SPX")
     spot: float
-    feed_timestamp: datetime    # timestamp du feed CBOE (heure ET, délayée 15 min)
-    fetched_at: datetime        # heure locale du pull (UTC)
-    options: pd.DataFrame       # une ligne par contrat
+    feed_timestamp: datetime    # CBOE feed timestamp (ET, delayed ~15 min)
+    fetched_at: datetime        # local pull time (UTC)
+    options: pd.DataFrame       # one row per contract
+    data_quality: DataQuality = DataQuality.VALID
+    age_seconds: float | None = None
 
 
 def _session() -> requests.Session:
