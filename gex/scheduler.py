@@ -12,6 +12,7 @@ import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, time, timedelta
 
+import numpy as np
 import pandas as pd
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -219,6 +220,14 @@ def build_native_summary(code: str, df: pd.DataFrame,
         fetched_at=datetime.now(UTC), options=df,
     )
     age_seconds = (now_et - snap.fetched_at).total_seconds()
+
+    # Compute net_dex handling NaN values (missing DEX data)
+    dex_series = df["dex"] if "dex" in df.columns else pd.Series(dtype=float)
+    if dex_series.notna().any():
+        net_dex = float(np.nansum(dex_series))
+    else:
+        net_dex = None
+
     summary = SummaryMetrics(
         timestamp=snap.feed_timestamp, symbol=code, spot=spot,
         net_gex=float(df["gex"].sum()),
@@ -229,8 +238,8 @@ def build_native_summary(code: str, df: pd.DataFrame,
         # mais elle n'était pas sommée ici : le champ retombait donc sur sa
         # valeur par défaut (0.0) et NQ/ES affichaient un DEX net nul depuis
         # toujours — un zéro qui ressemblait à une mesure alors que c'était un
-        # trou (constaté le 2026-07-29).
-        net_dex=float(df["dex"].sum()),
+        # trou (constaté le 2026-07-29). Now properly handles NaN.
+        net_dex=net_dex,
         # pas de "basis" : ce sont déjà des options sur LE future, pas un
         # indice à convertir vers un contrat qui lui serait associé
         basis=None, source="dxfeed",

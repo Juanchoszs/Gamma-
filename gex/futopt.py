@@ -376,7 +376,7 @@ def enrich_native(chain: pd.DataFrame, raw: dict[str, dict], spot: float,
     r = rates.current_rate()
     g = np.where(valid, greeks.gamma(spot, df["strike"].to_numpy(), t, r, iv), 0.0)
     dcall = greeks.call_delta(spot, df["strike"].to_numpy(), t, r, iv)
-    d = np.where(valid, np.where(is_call, dcall, dcall - 1.0), 0.0)
+    d = np.where(valid, np.where(is_call, dcall, dcall - 1.0), np.nan)
 
     df["gamma_bs"] = g
     df["delta_bs"] = d
@@ -390,6 +390,7 @@ def enrich_native(chain: pd.DataFrame, raw: dict[str, dict], spot: float,
     # `sign` que la gamma. Réutiliser `sign` ici rendait chaque contrat
     # positif sans exception (call et put donnaient tous deux +|δ|), donc
     # plus aucun strike ne pouvait ressortir négatif dans le graphique.
+    # When delta is NaN (no valid IV), DEX should be NaN to indicate missing data
     df["dex"] = -1.0 * d * oi * multiplier * spot
     df["spot"] = float(spot)
     return df

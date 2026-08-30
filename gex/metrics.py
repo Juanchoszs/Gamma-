@@ -490,8 +490,8 @@ class SummaryMetrics:
     pc_oi: float
     pc_volume: float
     net_gex_0dte: float = 0.0
-    basis: float | None = None   # future front month - spot, tracked over time
-    net_dex: float = 0.0
+    basis: float | None = None
+    net_dex: float | None = None
     # Provenance of the row. Determines what can be shared: "cboe" =
     # free public source, redistributable; "databento" = paid source
     # under personal use license, NOT redistributable.
@@ -544,6 +544,13 @@ def summarize(snapshot: ChainSnapshot, df: pd.DataFrame,
         source=snapshot.symbol,
     )
 
+    # Compute net_dex handling NaN values (missing DEX data)
+    dex_series = df["dex"] if "dex" in df.columns else pd.Series(dtype=float)
+    if dex_series.notna().any():
+        net_dex = float(np.nansum(dex_series))
+    else:
+        net_dex = None
+
     return SummaryMetrics(
         timestamp=snapshot.feed_timestamp,
         symbol=snapshot.symbol,
@@ -554,7 +561,7 @@ def summarize(snapshot: ChainSnapshot, df: pd.DataFrame,
         pc_volume=ratios["pc_volume"],
         net_gex_0dte=float(df.loc[bucket_mask(df, "0DTE", today), "gex"].sum()),
         basis=futures_basis(df, snapshot.spot, today) if with_basis else None,
-        net_dex=float(df["dex"].sum()),
+        net_dex=net_dex,
         data_quality=data_quality,
         age_seconds=age_seconds,
     )
