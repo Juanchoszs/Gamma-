@@ -13,6 +13,7 @@ import pandas as pd
 import pytest
 
 from gex import scheduler, store
+from gex.application import refresh_market, refresh_native
 from gex.metrics import ET
 
 
@@ -41,7 +42,7 @@ def test_pull_all_ignore_les_cibles_futopt(monkeypatch):
     collecte de ~90 s bloquerait la boucle CBOE à 60 s pour tout le monde."""
     called = []
     monkeypatch.setattr(scheduler, "market_is_open", lambda *a, **k: True)
-    monkeypatch.setattr(scheduler, "pull_symbol",
+    monkeypatch.setattr(refresh_market, "pull_symbol",
                         lambda key, **kw: called.append(key))
     scheduler.pull_all(force=True)
     assert "NQ" not in called and "ES" not in called
@@ -94,9 +95,9 @@ def test_pull_native_options_cache_frais_evite_la_collecte_live(tmp_path, monkey
     from gex.config import SETTINGS
 
     monkeypatch.setattr(SETTINGS, "data_dir", tmp_path)
-    monkeypatch.setattr(scheduler, "credentials_present", lambda: True)
+    monkeypatch.setattr(refresh_native, "credentials_present", lambda: True)
     called = []
-    monkeypatch.setattr(scheduler.futopt, "build_native_chain",
+    monkeypatch.setattr(refresh_native.futopt, "build_native_chain",
                         lambda code, **kw: called.append(code) or _native_chain())
 
     now = datetime.now(ET)
@@ -118,14 +119,14 @@ def test_pull_native_options_cache_perime_relance_la_collecte(tmp_path, monkeypa
     from gex.config import SETTINGS
 
     monkeypatch.setattr(SETTINGS, "data_dir", tmp_path)
-    monkeypatch.setattr(scheduler, "credentials_present", lambda: True)
+    monkeypatch.setattr(refresh_native, "credentials_present", lambda: True)
     called = []
 
     def _fake_build(code, **kw):
         called.append(code)
         return _native_chain()
 
-    monkeypatch.setattr(scheduler.futopt, "build_native_chain", _fake_build)
+    monkeypatch.setattr(refresh_native.futopt, "build_native_chain", _fake_build)
 
     stale_ts = datetime.now(ET) - timedelta(seconds=scheduler.NATIVE_CACHE_FRESH_S + 60)
     store.save_snapshot("NQ", _native_chain(), stale_ts)

@@ -1,23 +1,26 @@
-"""Live ingestion loop for CBOE and native futures data."""
+"""Live ingestion loop: APScheduler setup, cadences, and job registration."""
 from __future__ import annotations
 
 import logging
 import threading
-from dataclasses import dataclass, field
-from datetime import UTC, datetime, time, timedelta
+from datetime import datetime, time
 
-import numpy as np
-import pandas as pd
 from apscheduler.schedulers.background import BackgroundScheduler
 
-from . import backup, flowtape, idxopt, metrics, rates, roll, store
-from .config import SETTINGS, UNDERLYINGS
-from .domain import DataQuality
-from .ingest import ChainSnapshot, fetch_chain, fetch_index_spot
-from .metrics import ET, SummaryMetrics
-from . import futopt
-from .rtquote import PUBLIC_QUOTES, QUOTES, credentials_present
-from .tickcapture import CAPTURE
+from . import backup, rates
+from .application.flush_streams import flush_prices, flush_tape, flush_ticks
+from .application.refresh_market import pull_all, pull_symbol, pull_vix
+from .application.refresh_native import (
+    NATIVE_CACHE_FRESH_S,
+    native_index_key,
+    pull_native_index,
+    pull_native_options,
+)
+from .calculations.native import build_native_summary
+from .config import SETTINGS
+from .infrastructure.git_repository import push_data_repo
+from .metrics import ET
+from .state import STATE, GlobalState, UnderlyingState
 
 log = logging.getLogger(__name__)
 
@@ -30,70 +33,6 @@ def market_is_open(now_et: datetime | None = None) -> bool:
     if now_et.weekday() >= 5:
         return False
     return MARKET_OPEN <= now_et.time() <= MARKET_CLOSE
-
-
-@dataclass
-class UnderlyingState:
-    snapshot: ChainSnapshot | None = None
-    enriched: pd.DataFrame | None = None
-    summary: SummaryMetrics | None = None
-    last_feed_ts: datetime | None = None
-
-
-@dataclass
-class GlobalState:
-    lock: threading.Lock = field(default_factory=threading.Lock)
-    per_symbol: dict[str, UnderlyingState] = field(default_factory=dict)
-    last_error: str | None = None
-
-    def get(self, symbol: str) -> UnderlyingState:
-        return self.per_symbol.setdefault(symbol, UnderlyingState())
-
-
-STATE = GlobalState()
-
-
-def pull_symbol(symbol: str, persist_snapshot: bool) -> None:
-    u = UNDERLYINGS[symbol]
-    snap = fetch_chain(symbol, u.cboe_symbol)
-    enriched = metrics.enrich(snap)
-    summary = metrics.summarize(snap, enriched, with_basis=u.future is not None)
-    now = datetime.now(ET)
-
-    st = STATE.get(symbol)
-    with STATE.lock:
-        prev = st.enriched
-        prev_feed_ts = st.last_feed_ts
-
-    if (u.role == "target" and prev is not None
-            and prev_feed_ts != snap.feed_timestamp):
-        flow = metrics.flow_delta(prev, enriched, snap.spot)
-        flow["timestamp"] = snap.feed_timestamp
-        store.append_daily("flows", symbol, flow, now)
-
-    if persist_snapshot:
-        store.save_snapshot(
-            symbol, enriched, now,
-            source="cboe",
-            snapshot_type="LIVE",
-            data_quality="VALID",
-            market_state="LIVE",
-            schema_version=1,
-        )
-        store.append_history(summary.as_row())
-
-    with STATE.lock:
-        st.snapshot = snap
-        st.enriched = enriched
-        st.summary = summary
-        st.last_feed_ts = snap.feed_timestamp
-        STATE.last_error = None
-    log.info(
-        "%s pull ok — spot=%.2f netGEX=%.2f Bn zeroG=%s basis=%s",
-        symbol, snap.spot, summary.net_gex / 1e9,
-        f"{summary.zero_gamma:.0f}" if summary.zero_gamma else "n/a",
-        f"{summary.basis:+.1f}" if summary.basis is not None else "n/a",
-    )
 
 
 class _Cadence:
@@ -114,342 +53,6 @@ _CADENCE = _Cadence()
 # Constituents follow their own cadence; they rely on daily open interest and do not need the same resolution as targets.
 _CONSTITUENT_CADENCE = _Cadence(SETTINGS.constituent_interval_s)
 _CONSTITUENT_SNAPSHOT = _Cadence(SETTINGS.constituent_snapshot_interval_s)
-
-
-def pull_vix() -> None:
-    """Fetch the VIX spot used as market context and MCP context."""
-    try:
-        spot, ts = fetch_index_spot("_VIX")
-        store.append_index_spot("vix", {"timestamp": ts, "vix": spot})
-    except Exception:  # noqa: BLE001
-        log.exception("Échec pull VIX")
-
-
-def pull_all(force: bool = False) -> None:
-    if SETTINGS.market_hours_only and not market_is_open() and not force:
-        return
-    persist = _CADENCE.tick()
-    due = _CONSTITUENT_CADENCE.tick()
-    persist_constituent = _CONSTITUENT_SNAPSHOT.tick()
-    if due or force:
-        pull_vix()
-    for key, u in UNDERLYINGS.items():
-        if not u.enabled:
-            continue
-        if u.role == "context":
-            continue
-        if u.source == "futopt":
-            continue
-        is_constituent = u.role == "constituent"
-        if is_constituent and not (due or force):
-            continue
-        try:
-            pull_symbol(key, persist_snapshot=(persist_constituent if is_constituent else persist))
-        except Exception as e:  # noqa: BLE001
-            log.exception("Échec pull %s", key)
-            with STATE.lock:
-                STATE.last_error = f"{key}: {e}"
-
-
-def push_data_repo() -> None:
-    """Commit and push the data repository after market close if configured."""
-    import subprocess
-
-    repo = SETTINGS.data_dir
-    if not SETTINGS.auto_push_data or not (repo / ".git").exists():
-        return
-    day = datetime.now(ET).strftime("%Y-%m-%d")
-    try:
-        subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, capture_output=True)
-        diff = subprocess.run(["git", "-C", str(repo), "diff", "--cached", "--quiet"])
-        if diff.returncode == 0:
-            return
-        subprocess.run(["git", "-C", str(repo), "commit", "-m", f"data {day}"],
-                       check=True, capture_output=True)
-        has_remote = subprocess.run(["git", "-C", str(repo), "remote"],
-                                   capture_output=True, text=True).stdout.strip()
-        if has_remote:
-            subprocess.run(["git", "-C", str(repo), "push"], check=True,
-                           capture_output=True, timeout=120)
-            log.info("Repo data poussé (%s)", day)
-        else:
-            log.info("Repo data commité localement (%s, pas de remote)", day)
-    except Exception:
-        log.exception("Échec du push du repo data — données locales intactes")
-
-
-def build_native_summary(code: str, df: pd.DataFrame,
-                          now_et: datetime | None = None) -> tuple[ChainSnapshot, SummaryMetrics]:
-    """Build a summary for a native future-options chain."""
-    now_et = now_et or datetime.now(ET)
-    spot = float(df["spot"].iloc[0])
-    ratios = metrics.put_call_ratios(df)
-    today = now_et.date()
-    snap = ChainSnapshot(
-        symbol=code,
-        spot=spot,
-        feed_timestamp=now_et.replace(tzinfo=None),
-        fetched_at=datetime.now(UTC),
-        options=df,
-    )
-    age_seconds = (now_et - snap.fetched_at).total_seconds()
-
-    dex_series = df["dex"] if "dex" in df.columns else pd.Series(dtype=float)
-    if dex_series.notna().any():
-        net_dex = float(np.nansum(dex_series))
-    else:
-        net_dex = None
-
-    summary = SummaryMetrics(
-        timestamp=snap.feed_timestamp,
-        symbol=code,
-        spot=spot,
-        net_gex=float(df["gex"].sum()),
-        zero_gamma=metrics.zero_gamma(df, spot),
-        pc_oi=ratios["pc_oi"],
-        pc_volume=ratios["pc_volume"],
-        net_gex_0dte=float(df.loc[metrics.bucket_mask(df, "0DTE", today), "gex"].sum()),
-        net_dex=net_dex,
-        basis=None,
-        source="dxfeed",
-        data_quality=DataQuality.VALID,
-        age_seconds=age_seconds,
-    )
-    return snap, summary
-
-
-NATIVE_CACHE_FRESH_S = 300
-
-
-def _seed_native_state(code: str, df: pd.DataFrame, ts: datetime) -> SummaryMetrics:
-    """Populate STATE from a cached or freshly fetched native snapshot."""
-    snap, summary = build_native_summary(code, df, ts)
-    st = STATE.get(code)
-    with STATE.lock:
-        st.snapshot = snap
-        st.enriched = df
-        st.summary = summary
-        st.last_feed_ts = snap.feed_timestamp
-    return summary
-
-
-def pull_native_options() -> None:
-    """Chaînes d'options natives NQ et ES : construit, met à jour STATE, et
-    persiste — sans identifiants courtier, ne fait rien.
-
-    Coûte du temps (~90-280 s par sous-jacent, dominé par le rythme de
-    livraison du serveur, pas par notre code) : APScheduler l'exécute dans
-    son propre thread, ce qui ne retarde pas les pulls CBOE de 60 s.
-
-    Avant de payer ce coût, on regarde si un snapshot persisté a moins de
-    `NATIVE_CACHE_FRESH_S` : un redémarrage du process perd STATE (mémoire
-    pure) mais pas le disque — sans ce court-circuit, chaque redémarrage
-    (déploiement, crash) rejouait une collecte complète même si la dernière
-    date d'il y a deux minutes. La cadence normale (15 min) dépasse toujours
-    ce seuil, donc ce court-circuit ne saute jamais un vrai cycle de
-    rafraîchissement, seulement les redémarrages rapprochés.
-
-    Limite connue : ne calcule pas de flux delta (`flow_delta` suppose une
-    colonne `contract` façon CBOE, absente ici) — les onglets Flux et Gamma
-    échangé restent vides pour NQ/ES natifs. Le reste (niveaux, profil,
-    heatmap, positionnement) fonctionne, ces fonctions ne demandant que les
-    colonnes déjà produites par `futopt.enrich_native`.
-    """
-    if not credentials_present():
-        return
-    for code in ("NQ", "ES"):
-        cached = store.load_latest_snapshot(code)
-        if cached is not None:
-            df_cached, ts = cached
-            age_s = (datetime.now(ET) - ts.replace(tzinfo=ET)).total_seconds()
-            if 0 <= age_s < NATIVE_CACHE_FRESH_S:
-                _seed_native_state(code, df_cached, ts.replace(tzinfo=ET))
-                log.info("%s (natif) : cache de %.0f s, collecte live sautée",
-                         code, age_s)
-                continue
-        try:
-            df = futopt.build_native_chain(code)
-            if df is None or df.empty:
-                continue
-            now = datetime.now(ET)
-            store.save_snapshot(
-            code, df, now,
-            source="dxfeed",
-            snapshot_type="LIVE",
-            data_quality="VALID",
-            market_state="LIVE",
-            schema_version=1,
-        )
-            summary = _seed_native_state(code, df, now)
-            store.append_history(summary.as_row())
-            log.info("%s (natif) pull ok — spot=%.2f netGEX=%.2f Bn zeroG=%s",
-                     code, summary.spot, summary.net_gex / 1e9,
-                     f"{summary.zero_gamma:.0f}" if summary.zero_gamma else "n/a")
-        except Exception:  # noqa: BLE001 — un échec ne doit rien casser d'autre
-            log.exception("%s : échec de la collecte native", code)
-
-
-def native_index_key(symbol: str) -> str:
-    """Clé de stockage des chaînes d'indice natives.
-
-    Volontairement DISTINCTE du symbole CBOE : les deux sources coexistent
-    sur disque sans jamais se mélanger. Le natif porte les niveaux (il n'a
-    pas les 15 min de retard), CBOE continue de tourner à 60 s pour le flux
-    delta — qui a besoin d'une clé `contract` stable entre deux pulls et
-    d'une cadence qu'une collecte native (~20 s par chaîne) ne peut pas
-    tenir. L'interface, elle, n'expose qu'un seul symbole.
-    """
-    return f"{symbol}_RT"
-
-
-def pull_native_index() -> None:
-    """Chaînes d'options d'indice natives (SPX, NDX) — sans compte, ne fait rien.
-
-    Bien plus rapide que les chaînes sur future (~20 s contre ~90 s) depuis
-    l'arrêt anticipé sur complétude, d'où une cadence plus serrée : le retard
-    de 15 min de CBOE est précisément ce qu'on cherche à supprimer, le
-    rafraîchir toutes les 15 min n'aurait aucun sens.
-    """
-    if not credentials_present():
-        return
-    for symbol in idxopt.NATIVE_INDEX:
-        try:
-            df = idxopt.build_native_chain(symbol)
-            if df is None or df.empty:
-                continue
-            now = datetime.now(ET)
-            key = native_index_key(symbol)
-            store.save_snapshot(
-            key, df, now,
-            source="dxfeed",
-            snapshot_type="LIVE",
-            data_quality="VALID",
-            market_state="LIVE",
-            schema_version=1,
-        )
-            summary = _seed_native_state(key, df, now)
-            store.append_history(summary.as_row())
-            log.info("%s (indice natif) pull ok — spot=%.2f netGEX=%.2f Bn zeroG=%s",
-                     symbol, summary.spot, summary.net_gex / 1e9,
-                     f"{summary.zero_gamma:.0f}" if summary.zero_gamma else "n/a")
-        except Exception:  # noqa: BLE001 — un échec ne doit rien casser d'autre
-            log.exception("%s : échec de la chaîne d'indice native", symbol)
-
-
-def _flush_bars(bars: list, source: str) -> None:
-    """Écrit sur disque les bougies 1 min achevées, quelle que soit la
-    source (compte courtier ou repli public délayé — cf. flush_prices)."""
-    if not bars:
-        return
-    by_symbol: dict[str, list[dict]] = {}
-    for symbol, bar in bars:
-        ts = datetime.fromtimestamp(bar.minute, tz=UTC).astimezone(ET).replace(tzinfo=None)
-        by_symbol.setdefault(symbol, []).append({
-            "timestamp": ts, "open": bar.open, "high": bar.high,
-            "low": bar.low, "close": bar.close, "ticks": bar.ticks,
-            "source": source,
-        })
-    for symbol, rows in by_symbol.items():
-        try:
-            store.append_prices(symbol, rows, rows[0]["timestamp"])
-        except Exception:  # noqa: BLE001 — une écriture ratée ne doit rien casser
-            log.exception("Échec écriture des prix %s", symbol)
-
-
-def flush_prices() -> None:
-    """Écrit sur disque les bougies 1 min achevées par le flux temps réel.
-
-    Sans identifiants courtier, `QUOTES.drain_bars()` renvoie une liste vide
-    (la couche temps réel payante est inerte), mais `PUBLIC_QUOTES` — le
-    repli gratuit délayé sur NQ/ES (cf. rtquote.PublicDelayedQuotes) —
-    construit ses propres bougies de la même façon et doit être vidé lui
-    aussi : sans cette ligne, ses bougies s'accumulaient en mémoire sans
-    jamais être écrites, et le Heatmap retombait sur le repli grossier
-    (un point par pull, ~10 min) même là où un spot délayé existait déjà.
-
-    Provenance marquée à l'écriture : "dxfeed" (courtier, licence usage
-    personnel non redistribuable) ou "dxfeed_public" (flux démo public,
-    délayé ~15-20 min) — les deux exclues de l'export par défaut (cf.
-    gex/export.py, qui n'autorise que source == "cboe"), mais distinguées
-    pour ne jamais laisser croire que l'une est l'autre.
-    """
-    _flush_bars(QUOTES.drain_bars(), "dxfeed")
-    _flush_bars(PUBLIC_QUOTES.drain_bars(), "dxfeed_public")
-
-
-def flush_tape() -> None:
-    """Écrit les barres d'order flow signé achevées (cf. gex/flowtape.py).
-
-    Même logique que `flush_prices` : le collecteur agrège en mémoire (~2,4 M
-    de prints par séance, hors de question de les persister un par un), seules
-    les barres d'une minute touchent le disque.
-    """
-    bars = flowtape.TAPE.drain_bars()
-    if not bars:
-        return
-    by_symbol: dict[str, list[dict]] = {}
-    for symbol, bar in bars:
-        ts = datetime.fromtimestamp(bar.minute, tz=UTC).astimezone(ET).replace(tzinfo=None)
-        by_symbol.setdefault(symbol, []).append(bar.as_row(symbol, ts))
-    for symbol, rows in by_symbol.items():
-        try:
-            store.append_tape(symbol, rows, rows[0]["timestamp"])
-        except Exception:  # noqa: BLE001 — une écriture ratée ne doit rien casser
-            log.exception("Échec écriture de l'order flow %s", symbol)
-
-
-def flush_ticks() -> None:
-    """Écrit sur disque le brut tick-par-tick accumulé par la capture continue
-    (cf. gex/tickcapture). Même logique que flush_prices/flush_tape : le
-    collecteur agrège en mémoire, seul le flush touche le disque — ici vers le
-    parquet JOURNALIER de chaque contrat, chaque tick rangé selon sa SÉANCE CME,
-    définie en HEURE DE NEW YORK : 18:00 ET (ouverture) -> 16:59 ET (clôture) du
-    lendemain, soit `date = (heure ET + 6h).date()`.
-
-    ⚠️ Surtout PAS un découpage à l'heure de Paris : Paris ne vaut ET+6 que
-    lorsque les deux zones sont en heure d'été en même temps. Pendant les ~3
-    semaines par an où les bascules US et UE sont décalées (mi-mars, fin
-    octobre), l'écart tombe à 5 h et le fichier commence à 19:00 ET au lieu de
-    18:00 — la séance est alors coupée au mauvais endroit. L'ET est la seule
-    référence stable, parce que c'est celle du marché lui-même."""
-    buf = CAPTURE.drain()
-    for symbol, per_contract in buf.items():
-        # 1. Regrouper par (séance, contrat) et cumuler le volume de CHAQUE
-        #    contrat — y compris celui qu'on n'écrira pas : c'est cette mesure
-        #    qui décidera du dominant de la séance suivante (cf. gex/roll).
-        by_day: dict[str, dict[str, list]] = {}
-        volumes: dict[str, dict[str, float]] = {}
-        for contract, rows in per_contract.items():
-            for r in rows:
-                # +6 h : 18:00 ET (ouverture) bascule sur minuit, donc la date
-                # obtenue EST celle de la séance, y compris la partie du soir.
-                sess = (datetime.fromtimestamp(r["ts"], tz=UTC).astimezone(ET)
-                        + timedelta(hours=6))
-                day = sess.strftime("%Y-%m-%d")
-                by_day.setdefault(day, {}).setdefault(contract, []).append((sess, r))
-                volumes.setdefault(day, {})[contract] = (
-                    volumes.setdefault(day, {}).get(contract, 0) + (r.get("volume") or 0))
-
-        for day, per_c in by_day.items():
-            try:
-                roll.record_volumes(symbol, day, volumes.get(day, {}))
-            except Exception:  # noqa: BLE001 — l'état de roll ne doit rien bloquer
-                log.exception("Capture tick : échec mémorisation des volumes %s", symbol)
-            # 2. N'écrire que le contrat dominant : la série sur disque reste
-            #    une série CONTINUE, comparable au jeu de référence. L'ordre
-            #    passé est celui du courtier ([actif, suivant]) : c'est lui qui
-            #    sert de repli tant qu'aucun volume de veille n'est connu.
-            contracts = [c for c in CAPTURE.contract_order(symbol) if c in per_c]
-            contracts += [c for c in per_c if c not in contracts]
-            keep = roll.dominant(symbol, day, contracts)
-            items = per_c.get(keep) or []
-            if not items:
-                continue
-            rows_day = [it[1] for it in items]
-            try:
-                store.append_ticks(symbol, rows_day, items[0][0])
-            except Exception:  # noqa: BLE001 — une écriture ratée ne doit rien casser
-                log.exception("Capture tick : échec écriture %s", symbol)
 
 
 def start_scheduler() -> BackgroundScheduler:
@@ -500,3 +103,28 @@ def start_scheduler() -> BackgroundScheduler:
     threading.Thread(target=pull_native_options, daemon=True).start()
     threading.Thread(target=pull_native_index, daemon=True).start()
     return sched
+
+
+__all__ = [
+    "ET",
+    "MARKET_CLOSE",
+    "MARKET_OPEN",
+    "NATIVE_CACHE_FRESH_S",
+    "STATE",
+    "GlobalState",
+    "UnderlyingState",
+    "_Cadence",
+    "build_native_summary",
+    "flush_prices",
+    "flush_tape",
+    "flush_ticks",
+    "market_is_open",
+    "native_index_key",
+    "pull_all",
+    "pull_native_index",
+    "pull_native_options",
+    "pull_symbol",
+    "pull_vix",
+    "push_data_repo",
+    "start_scheduler",
+]

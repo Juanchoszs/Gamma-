@@ -4,13 +4,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .domain import DataQuality, MarketDataState
+from . import providers
+
 
 def _default_data_dir() -> Path:
     """data/ à la racine du dépôt si on tourne depuis les sources, sinon dans
     le dossier courant (cas d'un `pip install` : le code vit dans
     site-packages, où l'on n'écrit pas)."""
-    root = Path(__file__).resolve().parent.parent
+    # gex/config/__init__.py → parents[2] is the repository root.
+    root = Path(__file__).resolve().parents[2]
     if (root / ".git").exists() or (root / "pyproject.toml").exists():
         return root / "data"
     return Path.cwd() / "data"

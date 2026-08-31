@@ -80,6 +80,7 @@ def test_flush_ticks_n_ecrit_que_le_dominant(monkeypatch, tmp_path):
     écrit — mais les volumes des DEUX sont mémorisés pour la séance suivante."""
     from datetime import datetime, timedelta, UTC
     from gex import scheduler, store
+    from gex.application import flush_streams
     from gex.metrics import ET
 
     # tick à 10:00 ET le 2026-09-11 -> séance 2026-09-11
@@ -88,9 +89,9 @@ def test_flush_ticks_n_ecrit_que_le_dominant(monkeypatch, tmp_path):
         return {"ts": ts, "price": px, "volume": vol, "bid": None,
                 "ask": None, "side": None, "source": "dxfeed"}
 
-    monkeypatch.setattr(scheduler.CAPTURE, "drain", lambda: {
+    monkeypatch.setattr(flush_streams.CAPTURE, "drain", lambda: {
         "NQ": {FRONT: [row(100.0, 5)], NEXT: [row(200.0, 7)]}})
-    monkeypatch.setattr(scheduler.CAPTURE, "contract_order", lambda s: [FRONT, NEXT])
+    monkeypatch.setattr(flush_streams.CAPTURE, "contract_order", lambda s: [FRONT, NEXT])
 
     # la veille, FRONT dominait -> c'est lui qu'on écrit aujourd'hui
     roll.record_volumes("NQ", "2026-09-10", {FRONT: 900, NEXT: 100})

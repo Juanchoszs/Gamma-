@@ -111,13 +111,10 @@ def get_quality_config(
     provider: str, config: Optional[DataQualityConfig] = None
 ) -> ProviderQualityConfig:
     """Return the thresholds for a provider identifier."""
+    from gex.config.providers import quality_class_for
+
     settings = config or DEFAULT_QUALITY_CONFIG
-    normalized = provider.lower().strip()
-    if "native" in normalized or "futopt" in normalized:
-        return settings.native
-    if "dxfeed" in normalized:
-        return settings.dxfeed
-    return settings.cboe
+    return getattr(settings, quality_class_for(provider))
 
 
 def evaluate_data_quality(

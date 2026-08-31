@@ -20,9 +20,11 @@ def test_flush_prices_vide_les_deux_sources(tmp_path, monkeypatch):
     monkeypatch.setattr(SETTINGS, "data_dir", tmp_path)
     minute = int(time.time() // 60) * 60
 
-    monkeypatch.setattr(scheduler.QUOTES, "drain_bars",
+    from gex.application import flush_streams
+
+    monkeypatch.setattr(flush_streams.QUOTES, "drain_bars",
                         lambda: [("SPX", Bar(minute, 100.0, 101.0, 99.0, 100.5))])
-    monkeypatch.setattr(scheduler.PUBLIC_QUOTES, "drain_bars",
+    monkeypatch.setattr(flush_streams.PUBLIC_QUOTES, "drain_bars",
                         lambda: [("NQ", Bar(minute, 28000.0, 28010.0, 27990.0, 28005.0))])
 
     scheduler.flush_prices()
@@ -43,8 +45,10 @@ def test_flush_prices_rien_a_faire_sans_bougies(tmp_path, monkeypatch):
     from gex.config import SETTINGS
 
     monkeypatch.setattr(SETTINGS, "data_dir", tmp_path)
-    monkeypatch.setattr(scheduler.QUOTES, "drain_bars", lambda: [])
-    monkeypatch.setattr(scheduler.PUBLIC_QUOTES, "drain_bars", lambda: [])
+    from gex.application import flush_streams
+
+    monkeypatch.setattr(flush_streams.QUOTES, "drain_bars", lambda: [])
+    monkeypatch.setattr(flush_streams.PUBLIC_QUOTES, "drain_bars", lambda: [])
 
     scheduler.flush_prices()  # ne doit pas lever, ni rien écrire
 

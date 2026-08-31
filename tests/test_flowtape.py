@@ -193,12 +193,13 @@ def test_flush_ecrit_dans_tape_pas_dans_flows(tmp_path, monkeypatch):
     import time as _time
 
     from gex import scheduler, store
+    from gex.application import flush_streams
     from gex.config import SETTINGS
 
     monkeypatch.setattr(SETTINGS, "data_dir", tmp_path)
     t = _tape()
     t.ingest_print(_print(".SPXW260729C7400", "BUY", 12), now=_time.time())
-    monkeypatch.setattr(scheduler.flowtape, "TAPE", t)
+    monkeypatch.setattr(flush_streams.flowtape, "TAPE", t)
 
     scheduler.flush_tape()
 
