@@ -1,290 +1,496 @@
-# GEX Dashboard — analyse Gamma/Delta Exposure (SPX, NDX, SPY, QQQ)
+# Gamma Exposure Dashboard
 
-*[English version](README.en.md)* · *[FAQ](FAQ.md)* · *[Avertissement](DISCLAIMER.md)*
+A modular Gamma Exposure and Delta Exposure analytics platform for options markets.
 
-[![Tests](https://github.com/Darthreign/gex-dashboard/actions/workflows/tests.yml/badge.svg)](https://github.com/Darthreign/gex-dashboard/actions/workflows/tests.yml)
+This project analyzes options market structure through Gamma Exposure (GEX), Delta Exposure (DEX), Gamma Flip levels, dealer positioning, options flow, volatility, and historical market data.
 
-[Licence MIT](LICENSE) — outil d'**analyse uniquement** : pas de trading,
-pas d'exécution, pas de conseil en investissement. Chaque instance tire ses
-propres données depuis l'endpoint delayed public de CBOE ; ce projet ne
-rediffuse aucune donnée de marché.
+It currently focuses on major US indices and related instruments, including:
 
-> ⚠️ **Le trading d'options et de dérivés comporte un risque élevé de perte.**
-> Cet outil est fourni à titre éducatif, sans garantie, et ne constitue pas un
-> conseil en investissement. Lisez l'[avertissement complet](DISCLAIMER.md)
-> avant toute utilisation.
+* SPX
+* NDX
+* SPY
+* QQQ
+* ES
+* NQ
 
-## Aperçu
+## Project Origin and Acknowledgements
 
-| Vue principale | Gamma Profile |
-|---|---|
-| ![Vue principale](docs/screenshots/01-vue-principale.png) | ![Gamma Profile](docs/screenshots/02-gamma-profile.png) |
-| GEX/DEX par strike, niveaux 0DTE, flux delta, historique | Profil de GEX net selon le spot, décomposé par échéance |
+This project is based on the excellent work of [Darthreign](https://github.com/Darthreign), whose original **GEX Dashboard** repository provided the foundation for this project.
 
-| Vanna & Charm | Positionnement |
-|---|---|
-| ![Vanna et Charm](docs/screenshots/03-vanna-charm.png) | ![Positionnement](docs/screenshots/04-positionnement.png) |
-| Grecques de second ordre par strike | Variation d'open interest entre séances |
+The original project established the initial Gamma Exposure dashboard, data ingestion mechanisms, market calculations, visualizations, and options analytics architecture.
 
-Dashboard **d'analyse uniquement** (pas de trading) qui reconstruit les métriques
-de structure de marché façon SpotGamma à partir des chaînes d'options CBOE :
-Gamma Exposure par strike, Delta Exposure, GEX net, niveau Zero Gamma,
-put/call ratios, skew IV, et proxy de flux delta intraday.
+Special thanks to:
 
-**Envie de comprendre ce que chaque onglet et chaque chiffre affichent ?** →
-[Guide illustré](docs/guide/README.md), un fichier par onglet plus un fichier
-qui explique chaque nombre, pensé pour quelqu'un qui découvre le dashboard
-sans rien connaître aux options.
+**[Darthreign](https://github.com/Darthreign)**
 
-## Sources de données
+for creating and maintaining the original foundation that made this project possible.
 
-Le dashboard applique **une règle unique, partout** : la source temps réel si
-elle est disponible, la source gratuite sinon.
+This repository is an independently developed fork and has undergone significant architectural restructuring and refactoring.
 
-| | CBOE (public) | dxFeed (compte courtier) |
-|---|---|---|
-| Compte requis | non | oui (gratuit avec le compte) |
-| Fraîcheur | **~15 min de retard** | temps réel |
-| Sens acheteur/vendeur | non observable | **fourni par la source** |
-| Redistribuable | oui | **non** — usage strictement personnel |
+The goal is not simply to modify the original interface, but to evolve the codebase into a more modular, maintainable, and extensible Gamma Exposure analytics platform.
 
-**Sans compte courtier, rien d'essentiel ne manque** : tous les niveaux, tous
-les régimes et tous les graphiques fonctionnent sur la source publique. Seuls
-l'order flow signé et les bougies minute sur futures nécessitent un compte.
+## What Changed From the Original Project
 
-### CBOE — source par défaut
+The original implementation concentrated many responsibilities inside large modules.
 
-Endpoint delayed public (non documenté officiellement) :
-`https://cdn.cboe.com/api/global/delayed_quotes/options/_SPX.json` (indices
-préfixés `_`). Un GET ramène la chaîne complète — bid/ask, IV, open interest,
-volume, Greeks — plus le spot. **Délai ~15 min à la source**, régénéré ~toutes
-les 60 s (timestamp du feed en UTC). Sous-jacents suivis : SPX, NDX, SPY et
-QQQ (`gex/config.py`).
+This version progressively separates responsibilities into dedicated architectural layers.
 
-### dxFeed — quand un compte courtier est configuré
+The refactoring focuses on:
 
-Ce que le temps réel change, mesuré plutôt que supposé : sur les mêmes strikes
-0DTE, dxFeed voyait **3 à 6 fois plus de volume** que CBOE au même instant,
-pour un open interest **identique au contrat près**. Ce n'est pas une source
-plus approximative, c'est la même sans le retard.
+* Modular calculations
+* Domain models
+* Provider abstraction
+* Storage separation
+* Application orchestration
+* Infrastructure isolation
+* UI separation
+* Backward compatibility
+* Improved testing boundaries
 
-- **Chaînes natives** SPX / NDX / SPY / QQQ (`gex/idxopt.py`) et NQ / ES
-  (`gex/futopt.py`) — les options sur future ont leur propre structure de
-  gamma, distincte de l'indice transposé.
-- **Order flow signé** (`gex/flowtape.py`) : chaque transaction porte son côté
-  agresseur, donné par la source. Aucune heuristique de classification.
-- **Spot temps réel** et bougies 1 min pour la Heatmap.
+The project is being refactored incrementally to avoid changing mathematical behavior unnecessarily.
 
-⚠️ Ces données ne quittent jamais la machine : `gex/export.py` n'autorise à
-l'export que les lignes `source == "cboe"`.
-
-## Installation
-
-**Débutant, jamais installé ce genre d'outil ?** → suis le
-**[guide pas à pas illustré](INSTALL.md)** (15 min, aucune connaissance
-requise, sans ligne de commande à comprendre).
-
-Sinon, l'[installation assistée par Claude Code](#installation-assistée-claude-code)
-ou le [démarrage manuel](#démarrage) ci-dessous.
-
-## Installation assistée (Claude Code)
-
-Si tu utilises [Claude Code](https://claude.com/claude-code), ouvre-le dans un
-dossier vide et colle ce prompt — il fait tout, y compris l'enregistrement du
-serveur MCP :
-
-```
-Installe le dashboard GEX (analyse d'options SPX/NDX) sur ma machine.
-
-Dépôt : https://github.com/Darthreign/gex-dashboard
-
-Étapes :
-1. Vérifie que Python 3.11+ et git sont disponibles. S'il en manque un,
-   explique-moi comment l'installer et arrête-toi là.
-2. Clone le dépôt dans le dossier courant et places-toi dedans.
-3. Crée un environnement virtuel .venv et installe requirements.txt.
-4. Lance la suite de tests (pytest tests/ -q) pour valider l'installation :
-   tous les tests doivent passer.
-5. Adapte .mcp.json à mon système : remplace la valeur de "command" par le
-   chemin ABSOLU vers le python du venv (Windows : .venv\Scripts\python.exe,
-   macOS/Linux : .venv/bin/python). Le fichier livré contient un chemin
-   Windows relatif qui ne fonctionne pas ailleurs.
-6. Démarre le dashboard (python run.py) et donne-moi l'URL à ouvrir.
-7. Explique-moi que je dois redémarrer Claude Code depuis ce dossier pour
-   activer le serveur MCP "gex-data", et liste les outils qu'il expose.
-
-Important : aucun compte, aucune clé API ni abonnement n'est nécessaire — les
-données proviennent de l'endpoint public gratuit de CBOE. Ne me demande aucun
-identifiant. Les modules backfill.py (Databento) et tt_auth.py (tastytrade)
-sont optionnels et payants : ignore-les complètement.
-```
-
-Le serveur MCP permet ensuite d'interroger tes données en langage naturel
-(« analyse la structure gamma actuelle », « où sont les murs sur NDX ? »).
-
-## Démarrage
-
-```
-python -m venv .venv
-.venv\Scripts\pip install -r requirements.txt
-.venv\Scripts\python run.py        # dashboard sur http://127.0.0.1:8050
-```
-
-Tests : `.venv\Scripts\python -m pytest tests/`
-
-### Installation en package (optionnel)
-
-Le projet est un package Python standard. Installé, il expose deux commandes,
-sans avoir à se placer dans le dossier des sources :
-
-```
-pip install .                      # ou : pip install -e .  (mode développement)
-gex-dashboard                      # démarre le dashboard
-gex-mcp                            # démarre le serveur MCP
-```
-
-Une fois installé ainsi, `data/` et `logs/` sont créés **dans le dossier
-courant** (et non dans les sources) : lance la commande depuis le dossier où
-tu veux conserver ton historique.
-
-## Serveur MCP — interroger ses données en langage naturel
-
-C'est ce qui distingue vraiment cet outil d'un dashboard classique : une fois
-le serveur MCP actif, tu peux poser tes questions directement à Claude, qui
-lit tes fichiers Parquet et te répond sur **tes** données.
-
-```
-« Où sont les murs de gamma sur NDX ? »
-« Analyse le régime gamma actuel sur SPX »
-« Comment le GEX net a-t-il évolué cette semaine ? »
-« Montre-moi le flux delta de la dernière séance »
-```
-
-⚠️ **Le serveur MCP ne s'active qu'au démarrage de Claude Code, depuis le
-dossier du projet.** Si tu viens d'installer l'outil, ferme Claude Code et
-relance-le depuis ce dossier — sinon les commandes resteront invisibles.
-C'est l'unique étape qui déroute à l'installation.
-
-Le fichier [`.mcp.json`](.mcp.json) enregistre le serveur automatiquement.
-Il contient un chemin **Windows relatif** : sous macOS ou Linux, remplace la
-valeur de `command` par le chemin absolu vers `.venv/bin/python`, faute de
-quoi le serveur échoue sans message explicite.
-
-Outils exposés : `get_market_context` (synthèse : régime, murs les plus
-proches du spot, VIX), `get_gex_summary`, `get_gex_by_strike` (murs de gamma),
-`get_flow_delta`, `get_history`, `get_reports`, `get_log_tail`.
-
-Ces outils suivent la même règle de source que l'interface : ils répondent sur
-la chaîne native quand elle existe, sur CBOE sinon — pour éviter deux vérités
-différentes selon qu'on regarde l'écran ou qu'on interroge Claude.
-
-## Bot Discord — partager le verdict (optionnel)
-
-Un composant séparé et léger ([`discord_bot/`](discord_bot/README.md)) relaie
-dans un salon Discord le **verdict** d'état du gamma. Des amis voient ta
-conclusion (« Gamma négatif sur le Nasdaq, contrarien risqué ») **sans compte
-courtier ni accès aux données brutes** : le bot n'interroge que l'API locale du
-dashboard (`/api/v1/digest`), qui ne renvoie que des analyses dérivées — jamais
-les chaînes d'options.
-
-- **Posts automatiques** à heures fixes (8h30 / 15h25 / 15h35 / 17h30 Paris) et
-  à chaque **changement de régime** en séance US. Silencieux le week-end.
-- **Verdict par famille** : le régime est jugé par classe d'actifs indépendante
-  — **S&P** (SPX/SPY/ES) et **Nasdaq** (NDX/QQQ/NQ) — et non symbole par
-  symbole, avec un poids plus fort à l'indice cash qu'à l'ETF puis au future.
-  Couleur : 🔴 2 familles négatives ou une en fort négatif · 🟠 1 famille
-  négative ou VIX élevé · 🟢 sinon. Une ligne de **confiance** reflète la
-  couverture des données.
-- **Commandes à la demande** : `!etat`/`!gamma` (digest), `!gamma NQ` (valeurs
-  calculées), `!niveaux NQ` (niveaux GEX, transposables : `!niveaux NDX NQ`),
-  n'importe quel graphique en image (`!heatmap NQ`, `!delta SPX`…) et `!help`.
-
-Le bot n'expose que des conclusions calculées : c'est ce qui permet de les
-partager sans rediffuser un flux sous licence personnelle. Mise en place dans le
-[README du bot](discord_bot/README.md).
-
-## Fonctionnalités
-
-- GEX / DEX par strike (fenêtre réglable ±2/4/10 %), calls/puts au survol
-- Niveaux 0DTE tracés : **GEX1-5** (murs de gamma), **Flip** (zero gamma,
-  pondéré open interest), **HVL** (bascule pondérée par le volume du jour)
-- GEX net, P/C ratios, skew IV par expiration, vue par échéance (0DTE/semaine/mois)
-- Flux delta 1 min (proxy Δvolume×δ) avec sélecteur de journée
-- Historique GEX net & spot vs zero gamma (s'accumule automatiquement)
-- Backfill historique optionnel via Databento (`gex/backfill.py`, payant,
-  devis affiché avant tout téléchargement)
-- **Order flow signé** sur options (compte courtier) : côté agresseur fourni
-  par la source, pondéré par le delta — une mesure d'impact de couverture, pas
-  un décompte de contrats. Jambes de combos isolées du flux net.
-- VIX en confluence, en direct si l'abonnement le permet, délayé sinon
-- Serveur MCP (`gex/mcp_server.py`) pour interroger les données depuis Claude
-- Bot Discord optionnel ([`discord_bot/`](discord_bot/README.md)) qui diffuse le
-  verdict d'état du gamma (analyses dérivées seulement) — voir plus haut
-- Titres de graphiques cliquables : chaque titre renvoie à la section du
-  [guide illustré](docs/guide/README.md) qui l'explique
-
-## Backfill Databento (optionnel)
-
-Copier `.env.example`, renseigner `DATABENTO_API_KEY`, puis par ex. :
-`python -m gex.backfill --daily-days 31 --intraday-days 7 --max-cost 40`.
-Les fichiers bruts sont conservés dans `data/databento/` : relancer ne
-refacture jamais ce qui est déjà téléchargé. La passerelle Databento peut
-renvoyer des 504 sur les grosses requêtes : préférer des tranches d'une
-semaine (`--end` + `--daily-days 7`).
+Existing formulas are preserved unless tests demonstrate a real bug.
 
 ## Architecture
 
-- `gex/ingest.py` — fetch + parsing des chaînes CBOE (retry/backoff)
-- `gex/idxopt.py` — chaînes d'indice natives via dxFeed (temps réel)
-- `gex/futopt.py` — chaînes d'options sur future NQ/ES via dxFeed
-- `gex/flowtape.py` — order flow signé (TimeAndSale + Greeks)
-- `gex/rtquote.py` — spot temps réel et bougies 1 min
-- `gex/greeks.py` — Black-Scholes vectorisé (testé sur valeurs Hull)
-- `gex/metrics.py` — GEX/DEX par strike, zero gamma, P/C, flux delta
-- `gex/store.py` — Parquet : snapshots complets (10 min), flux (1 min), historique
-- `gex/scheduler.py` — boucle APScheduler, heures de marché ET (9:30–16:15)
-- `gex/app.py` — dashboard Dash (refresh auto 60 s)
+The project is organized around clear responsibilities.
 
-## Conventions de calcul
+```text
+gex/
+│
+├── analysis/
+│   ├── backtest.py
+│   └── analytical workflows
+│
+├── api/
+│   ├── rest.py
+│   └── mcp.py
+│
+├── application/
+│   ├── refresh_market.py
+│   ├── refresh_native.py
+│   ├── flush_streams.py
+│   ├── scheduler.py
+│   ├── digest.py
+│   ├── export.py
+│   └── roll.py
+│
+├── calculations/
+│   ├── gex.py
+│   ├── gamma_flip.py
+│   ├── levels.py
+│   ├── regime.py
+│   ├── flow.py
+│   ├── greeks.py
+│   ├── pinning.py
+│   ├── tickstats.py
+│   └── native.py
+│
+├── cli/
+│   ├── run.py
+│   ├── backfill.py
+│   ├── backup.py
+│   └── pricehist.py
+│
+├── config/
+│   ├── __init__.py
+│   └── providers.py
+│
+├── domain/
+│   ├── models.py
+│   ├── quality.py
+│   └── state.py
+│
+├── infrastructure/
+│   ├── git_repository.py
+│   ├── logsetup.py
+│   └── rates.py
+│
+├── providers/
+│   ├── ingest.py
+│   ├── idxopt.py
+│   ├── futopt.py
+│   ├── rtquote.py
+│   ├── flowtape.py
+│   ├── tickcapture.py
+│   ├── tt_auth.py
+│   └── tt_web.py
+│
+├── storage/
+│   ├── snapshots.py
+│   ├── history.py
+│   ├── prices.py
+│   ├── ticks.py
+│   ├── flow.py
+│   └── parquet.py
+│
+├── ui/
+│   ├── app.py
+│   ├── i18n.py
+│   └── scales.py
+│
+├── state.py
+├── metrics.py
+├── scheduler.py
+└── app.py
+```
 
-- **GEX** ($ par 1 % de move) = γ × OI × 100 × spot² × 0,01 — calls positifs,
-  puts négatifs (convention « naive » SpotGamma : dealers longs calls, courts puts).
-- **Zero Gamma** : recalcul du profil de GEX net sur une grille de spots ±8 %
-  (IV et maturités figées), interpolation du passage par zéro le plus proche du spot.
-- **Flux delta** (proxy) = Δvolume entre deux pulls × δ × 100 × spot. Le sens
-  taker n'est pas observable dans ce feed : pression delta-pondérée, pas un
-  vrai order-flow signé.
-- Échéances posées à 16:00 ET ; contrats expirés exclus ; 0DTE gardé en séance
-  avec plancher de 5 min sur t.
+## Architectural Principles
 
-## Soutenir le projet
+The project follows a practical incremental architecture rather than introducing unnecessary abstraction.
 
-Le dashboard est gratuit, sans publicité et sans collecte de données — et il le
-restera. Si tu l'utilises et qu'il te fait gagner du temps, tu peux offrir un
-café au développement :
+### Calculations
 
-[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-dwarfsquirrel-FFDD00?style=flat-square&logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/dwarfsquirrel)
+Pure mathematical and analytical logic belongs in:
 
-C'est entièrement facultatif. Un don n'ouvre droit à aucun support, aucune
-priorité sur les fonctionnalités et aucune garantie — les termes de la
-[licence MIT](LICENSE) et de l'[avertissement](DISCLAIMER.md) restent
-inchangés. Signaler un bug ou proposer une amélioration aide tout autant.
+```text
+gex/calculations/
+```
 
-## Limites connues
+Examples include:
 
-- **Sans compte courtier** : données délayées 15 min — outil de lecture de
-  structure, pas d'exécution. Avec un compte, le retard disparaît mais l'outil
-  reste un outil d'analyse : ni ordre, ni exécution, ni conseil.
-- L'order flow signé ne couvre que les strikes à ±1,5 % du spot sur les 2
-  échéances les plus proches (là où se traite l'essentiel). Ses amplitudes ne
-  sont donc pas comparables à celles du proxy CBOE, qui porte sur toute la
-  chaîne.
-- Endpoint CBOE non contractuel : le format peut changer (l'ingestion est
-  isolée pour pouvoir brancher une autre source, ex. Tradier).
-- **SPY et QQQ** : ces ETF versent un dividende, or le calcul suppose un
-  rendement nul (q = 0). L'approximation reste faible sur les échéances
-  courtes mais n'est pas nulle — les indices SPX et NDX, eux, n'ont pas ce
-  biais. Ils n'ont par ailleurs pas de future associé, donc le sélecteur
-  Indice/Futures y est inactif.
-#   G a m m a -  
- 
+* Gamma Exposure calculations
+* Delta Exposure calculations
+* Gamma Flip
+* Key levels
+* Market regimes
+* Flow calculations
+* Greeks
+* Pinning calculations
+
+These modules should not depend on Dash, scheduling, HTTP endpoints, or storage implementation.
+
+### Domain
+
+Core concepts and business models belong in:
+
+```text
+gex/domain/
+```
+
+This includes:
+
+* Data quality
+* Market state
+* Core analytical models
+* Domain-level configuration
+
+### Providers
+
+External market-data connections belong in:
+
+```text
+gex/providers/
+```
+
+Providers are responsible for acquiring data, not calculating the entire market analysis.
+
+Examples include:
+
+* CBOE ingestion
+* Real-time quotes
+* Index options
+* Futures options
+* Flow feeds
+
+### Storage
+
+Persistence is isolated in:
+
+```text
+gex/storage/
+```
+
+This includes:
+
+* Snapshots
+* Historical data
+* Prices
+* Tick data
+* Flow data
+* Parquet operations
+
+### Application
+
+Application workflows belong in:
+
+```text
+gex/application/
+```
+
+Examples include:
+
+* Refreshing market data
+* Refreshing native instruments
+* Flushing streams
+* Scheduling workflows
+* Exporting data
+* Digest generation
+
+The application layer coordinates the system without containing the mathematical implementation itself.
+
+### Infrastructure
+
+Technical infrastructure belongs in:
+
+```text
+gex/infrastructure/
+```
+
+Examples:
+
+* Logging
+* Git repository operations
+* Rates and external infrastructure helpers
+
+### User Interface
+
+UI-specific code belongs in:
+
+```text
+gex/ui/
+```
+
+The UI should consume application and analytical layers rather than containing core business calculations.
+
+## Main Features
+
+### Gamma Exposure
+
+The platform calculates Gamma Exposure across options strikes and expirations.
+
+The general GEX convention used is:
+
+```text
+GEX = Gamma × Open Interest × Contract Multiplier × Spot² × 0.01
+```
+
+Calls and puts are represented according to the project's established sign convention.
+
+### Delta Exposure
+
+DEX measures the delta-weighted market exposure associated with open interest.
+
+Historical and live calculations are kept consistent through characterization and regression tests.
+
+### Gamma Flip
+
+The Gamma Flip estimates the underlying price level where aggregate gamma exposure changes sign.
+
+The calculation evaluates the gamma profile over a range of theoretical spot prices and identifies the zero crossing.
+
+### Key Gamma Levels
+
+The system identifies important market structure levels such as:
+
+* Call Wall
+* Put Wall
+* High Gamma strikes
+* Gamma Flip
+* Key GEX concentrations
+
+### Market Regime
+
+The project classifies market structure using gamma-related thresholds and percentile calculations.
+
+### Options Flow
+
+Flow calculations analyze changes in options activity and delta-weighted exposure.
+
+Where real signed aggressor information is available, the system can distinguish actual reported flow from proxy calculations.
+
+### Historical Analysis
+
+The project supports persistence and historical analysis of:
+
+* GEX
+* DEX
+* Spot price
+* Gamma Flip
+* Options structure
+* Flow data
+
+### Backtesting
+
+Analytical and backtesting functionality is separated from the primary application workflow.
+
+## Data Sources
+
+### CBOE
+
+The primary public data source is CBOE delayed market data.
+
+This allows the project to operate without requiring a brokerage account for the core dashboard functionality.
+
+The public source provides approximately delayed options market information depending on the endpoint and market conditions.
+
+### Optional Providers
+
+The architecture is designed so additional providers can be integrated without placing provider-specific logic throughout the entire application.
+
+Provider metadata and capabilities are centralized to support future expansion.
+
+Potential categories include:
+
+* Delayed public data
+* Real-time brokerage feeds
+* Historical market data providers
+* Licensed institutional feeds
+
+Provider integrations must respect licensing and redistribution restrictions.
+
+## Installation
+
+Clone the repository:
+
+```bash
+git clone https://github.com/Juanchoszs/Gamma-.git
+cd Gamma-
+```
+
+Create a virtual environment:
+
+```bash
+python -m venv .venv
+```
+
+Activate it on Windows:
+
+```powershell
+.venv\Scripts\Activate.ps1
+```
+
+Install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+Run the tests:
+
+```bash
+python -m pytest tests -q
+```
+
+Start the application:
+
+```bash
+python run.py
+```
+
+The dashboard should be available locally at:
+
+```text
+http://127.0.0.1:8050
+```
+
+## Development Philosophy
+
+This project is being improved through incremental refactoring.
+
+The goal is not to rewrite everything at once.
+
+Each architectural change should:
+
+1. Preserve existing behavior.
+2. Maintain public compatibility where practical.
+3. Avoid duplicating formulas.
+4. Keep mathematical calculations deterministic.
+5. Add regression tests when behavior is not already protected.
+6. Run targeted tests after changes.
+7. Run the complete test suite before completion.
+8. Avoid unnecessary abstraction.
+
+Large "enterprise architecture" structures are intentionally avoided unless they solve a real problem.
+
+The architecture should become clearer, not simply contain more folders.
+
+## Testing
+
+The project contains an extensive regression test suite covering:
+
+* Metrics
+* GEX calculations
+* DEX calculations
+* Gamma Flip
+* Market state
+* Data quality
+* Providers
+* Native instruments
+* Flow processing
+* Storage
+* Scheduling boundaries
+* API behavior
+
+Run the complete suite with:
+
+```bash
+python -m pytest tests -q
+```
+
+Before committing significant architectural changes, the full suite should pass.
+
+## Project Status
+
+The project is under active architectural development.
+
+The current work focuses on transforming the original codebase into a clearer modular structure while preserving the analytical functionality that made the original project valuable.
+
+Current refactoring areas include:
+
+* Calculation isolation
+* Provider boundaries
+* Storage separation
+* Application orchestration
+* UI separation
+* Import compatibility
+* Dependency reduction
+* Test coverage
+* Documentation
+
+## Important Notice
+
+This project is an analytical and educational tool.
+
+It does not provide:
+
+* Investment advice
+* Trading signals
+* Automated trading recommendations
+* Guaranteed market predictions
+
+Options and derivatives involve substantial financial risk.
+
+Any analysis generated by this software should be independently evaluated.
+
+## License and Original Work
+
+The original project and its licensing terms must be respected.
+
+This repository acknowledges the work of the original author:
+
+**[Darthreign](https://github.com/Darthreign)**
+
+The original GEX Dashboard provided the foundation upon which this independently refactored and extended version is being developed.
+
+If you use, redistribute, or contribute to this project, please also respect the licensing and attribution requirements associated with the original work.
+
+## Acknowledgements
+
+Special thanks again to:
+
+**[Darthreign](https://github.com/Darthreign)**
+
+for the original GEX Dashboard project and for creating the foundation that enabled this project to evolve.
+
+This repository represents continued independent development, architectural restructuring, and experimentation built upon that foundation.
+
+## Repository
+
+Current project repository:
+
+https://github.com/Juanchoszs/Gamma-
+
+Original author:
+
+https://github.com/Darthreign
