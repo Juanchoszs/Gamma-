@@ -7,10 +7,11 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 
-from .. import greeks, rates
+from . import greeks
+from ..infrastructure import rates
 from ..config import CONTRACT_MULTIPLIER, SETTINGS
 from ..domain import DataQuality
-from ..ingest import ChainSnapshot
+from ..domain.models import ChainSnapshot
 
 ET = ZoneInfo("America/New_York")
 YEAR_SECONDS = 365.0 * 24 * 3600
@@ -18,14 +19,12 @@ EXPIRY_BUCKETS = ["0DTE", "Semaine", "Mois", "Tout"]
 def gamma_profile(df: pd.DataFrame, spot: float, weight_col: str = "open_interest",
                   range_pct: float | None = None, steps: int | None = None
                   ) -> tuple[np.ndarray, np.ndarray] | None:
-    """Profil de GEX net recalculé sur une grille de spots hypothétiques.
+    """Net GEX profile recalculated on a hypothetical spot grid.
 
-    IV et maturités sont figées : on ne simule que le déplacement du spot, ce
-    qui isole l'effet de position. La pente au niveau du spot dit à quelle
-    vitesse le régime se dégrade ; les creux signalent les zones
-    d'accélération.
+    IV and maturities are fixed to isolate position effects.
+    Slope near spot indicates regime degradation speed; troughs highlight acceleration zones.
 
-    Retourne (grille de spots, GEX net en $ par 1 %), ou None si rien d'exploitable.
+    Returns (spot grid, net GEX in $ per 1%), or None.
     """
     d = df[(df["iv"] > 1e-4) & (df[weight_col] > 0)]
     if d.empty:
@@ -45,21 +44,11 @@ def gamma_profile(df: pd.DataFrame, spot: float, weight_col: str = "open_interes
 
 def gex_at_spot(df: pd.DataFrame, ref_spot: float,
                 weight_col: str = "open_interest") -> pd.Series:
-    """GEX par strike, gamma RECALCULÉ à un spot de référence donné.
+    """GEX by strike, gamma RECALCULATED at a reference spot.
 
-    Distinct de `gex_by_strike_weighted`, qui réutilise le gamma déjà stocké —
-    donc celui du spot au moment du pull.
-
-    Pourquoi c'est nécessaire : le gamma culmine à la monnaie. Évalué au spot
-    courant, le strike au plus fort |GEX| migre avec le prix, et le « mur »
-    finit par désigner l'endroit où se trouve le marché plutôt qu'une zone de
-    couverture. Mesuré sur une chaîne SPX réelle, faire varier la référence de
-    7350 à 7500 déplace les cinq murs de bout en bout.
-
-    Un mur est une propriété de la distribution d'open interest, qui ne change
-    qu'une fois par jour. L'évaluer à un spot figé — la clôture de la veille,
-    quand cet open interest a été arrêté — le rend stable en séance, ce qu'un
-    plan de trading exige.
+    Different from `gex_by_strike_weighted`, which uses feed spot gamma.
+    Since gamma peaks at ATM, evaluating at live spot makes the strongest wall move with price.
+    Evaluating at a fixed spot (prior close) keeps the walls stable intraday.
     """
     d = df[(df["iv"] > 1e-4) & (df[weight_col] > 0)]
     if d.empty:
@@ -74,30 +63,21 @@ def gex_at_spot(df: pd.DataFrame, ref_spot: float,
 
 def net_gex_at(df: pd.DataFrame, spot: float,
                weight_col: str = "open_interest") -> float | None:
-    """GEX net recalculé à un spot donné, IV et maturités figées.
+    """Net GEX recalculated at a given spot, keeping IV/t fixed.
 
-    Sert à rafraîchir le GEX net au spot temps réel sans chaîne d'options
-    fraîche : l'open interest ne change qu'une fois par jour et l'IV bouge
-    lentement, alors que le gamma de chaque contrat suit le spot en continu.
-    C'est donc le spot qui rend la mesure périmée, pas la chaîne.
-
-    Le calcul est celui de `gamma_profile` évalué en un point, donc sur le même
-    sous-ensemble de contrats que le Gamma Flip : GEX net et distance au flip
-    restent cohérents entre eux, ce qui est ce qui compte pour lire le régime.
+    Used to refresh live GEX when spot moves but OI is unchanged.
+    Consistent with gamma flip calculation.
     """
     res = gamma_profile(df, spot, weight_col, range_pct=0.0, steps=1)
     return None if res is None else float(res[1][0])
 
 
 def zero_gamma(df: pd.DataFrame, spot: float, weight_col: str = "open_interest") -> float | None:
-    """Niveau de spot où le GEX net (recalculé à ce spot) change de signe.
+    """Spot level where net GEX crosses zero.
 
-    Recalcule le gamma BS sur une grille de spots ±zg_range en gardant IV et
-    t figés, puis interpole le passage par zéro le plus proche du spot.
-
-    weight_col="open_interest" : le flip structurel (zero gamma classique).
-    weight_col="volume"        : le HVL façon volatility trigger — bascule du
-    profil pondéré par ce qui se traite (et donc se hedge) aujourd'hui.
+    Recalculates BS gamma on a grid ±zg_range, keeping IV/t fixed, and interpolates crossing.
+    `weight_col="open_interest"`: structural flip (classic zero gamma).
+    `weight_col="volume"`: HVL volatility trigger (intraday hedging flip).
     """
     res = gamma_profile(df, spot, weight_col)
     if res is None:
@@ -106,7 +86,7 @@ def zero_gamma(df: pd.DataFrame, spot: float, weight_col: str = "open_interest")
     crossings = np.where(np.diff(np.sign(profile)) != 0)[0]
     if len(crossings) == 0:
         return None
-    # passage par zéro le plus proche du spot
+    # closest zero crossing to spot
     idx = crossings[np.argmin(np.abs(grid[crossings] - spot))]
     x0, x1 = grid[idx], grid[idx + 1]
     y0, y1 = profile[idx], profile[idx + 1]

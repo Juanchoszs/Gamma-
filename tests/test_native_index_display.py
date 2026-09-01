@@ -13,7 +13,7 @@ import pandas as pd
 
 from gex import app as gex_app
 from gex import metrics, scheduler
-from gex.ingest import ChainSnapshot
+from gex.domain.models import ChainSnapshot
 from gex.metrics import ET
 
 

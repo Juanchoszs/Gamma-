@@ -10,7 +10,8 @@ from datetime import datetime, time
 
 import pandas as pd
 
-from gex import tickcapture, tickstats
+from gex.providers import tickcapture
+from gex import tickstats
 from gex.metrics import ET
 
 

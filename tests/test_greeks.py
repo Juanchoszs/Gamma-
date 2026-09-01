@@ -4,7 +4,7 @@ S=100, K=100, T=1 an, r=5%, sigma=20%.
 import numpy as np
 import pytest
 
-from gex import greeks
+from gex.calculations import greeks
 
 S, K, T, R, SIG = 100.0, 100.0, 1.0, 0.05, 0.20
 

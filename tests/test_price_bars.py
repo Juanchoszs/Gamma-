@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from gex.rtquote import Bar, RealtimeQuotes
+from gex.providers.rtquote import Bar, RealtimeQuotes
 
 
 def _feed(q: RealtimeQuotes, prices: list[float], minute: int) -> None:

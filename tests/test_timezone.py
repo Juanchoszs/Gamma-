@@ -66,7 +66,7 @@ def test_store_imports_et_from_metrics():
 def test_et_timezone_consistency():
     """ET timezone should be consistent across the project."""
     from gex.metrics import ET as ET_METRICS
-    from gex.ingest import _ET as ET_INGEST
+    from gex.providers.ingest import _ET as ET_INGEST
     from gex.scheduler import ET as ET_SCHEDULER
     from gex.app import ET as ET_APP
 

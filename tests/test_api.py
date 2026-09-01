@@ -11,7 +11,7 @@ from flask import Flask
 
 from gex import metrics
 from gex.api import register_api
-from gex.ingest import ChainSnapshot
+from gex.domain.models import ChainSnapshot
 from gex.metrics import ET
 from gex.scheduler import STATE
 

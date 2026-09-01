@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 from ..domain import DataQuality
-from ..ingest import ChainSnapshot
+from ..domain.models import ChainSnapshot
 from .flow import put_call_ratios
 from .gamma_flip import zero_gamma
 from .gex import bucket_mask

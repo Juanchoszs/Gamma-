@@ -7,10 +7,11 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 
-from .. import greeks, rates
+from . import greeks
+from ..infrastructure import rates
 from ..config import CONTRACT_MULTIPLIER, SETTINGS
 from ..domain import DataQuality
-from ..ingest import ChainSnapshot
+from ..domain.models import ChainSnapshot
 
 ET = ZoneInfo("America/New_York")
 YEAR_SECONDS = 365.0 * 24 * 3600
@@ -19,30 +20,27 @@ from .gamma_flip import gex_at_spot
 from .gex import bucket_mask
 
 def third_friday(year: int, month: int) -> date:
-    """3e vendredi du mois — échéance des futures index CME."""
+    """3rd Friday of the month (CME index futures expiry)."""
     first = date(year, month, 1)
     return first + timedelta(days=(4 - first.weekday()) % 7 + 14)
 
 
 def front_futures_expiry(today: date) -> date:
-    """Échéance du future front month (trimestriel : mars/juin/sept/déc)."""
+    """Front month future expiry (quarterly)."""
     for y in (today.year, today.year + 1):
         for m in (3, 6, 9, 12):
             e = third_friday(y, m)
             if e >= today:
                 return e
-    raise ValueError("échéance introuvable")
+    raise ValueError("expiry not found")
 
 
 def futures_basis(df: pd.DataFrame, spot: float, today: date | None = None) -> float | None:
-    """Basis future - spot, déduit de la parité call-put : F = (C-P)·e^(rT) + K.
+    """Future-spot basis from call-put parity: F = (C-P)·e^(rT) + K.
 
-    Utilise l'échéance d'options la plus proche de celle du future front month,
-    et la médiane sur les strikes proches de la monnaie (robuste aux quotes
-    aberrantes). Retourne None si aucune paire exploitable.
-
-    Le basis décroît vers 0 à l'approche de l'échéance : il est recalculé à
-    chaque pull, jamais figé.
+    Uses options nearest to front month future expiry and near-the-money median.
+    Returns None if no valid pairs.
+    Basis shrinks towards 0 near expiry; recalculated on every pull.
     """
     if df.empty:
         return None
@@ -54,7 +52,7 @@ def futures_basis(df: pd.DataFrame, spot: float, today: date | None = None) -> f
     target = min(exps, key=lambda e: abs((e - target_exp).days))
 
     e = df[df["expiry"] == target]
-    # racines multiples (SPX/SPXW) sur une même échéance : garder le plus traité
+    # Handle multiple roots (SPX/SPXW) on same expiry: keep most traded
     e = e.sort_values("volume").drop_duplicates(["type", "strike"], keep="last")
     calls = e[e["type"] == "C"].set_index("strike")
     puts = e[e["type"] == "P"].set_index("strike")
@@ -71,11 +69,10 @@ def futures_basis(df: pd.DataFrame, spot: float, today: date | None = None) -> f
     if len(fwds) < 5:
         return None
     basis = float(np.median(fwds)) - spot
-    # garde-fou : le basis d'un future index reste sous ~2 % du spot (portage
-    # taux - dividendes sur < 1 an). Au-delà, les quotes sont aberrantes et une
-    # conversion silencieuse fausserait tous les niveaux.
+    # Guardrail: index future basis stays under ~2% of spot.
+    # Beyond this, quotes are aberrant and would skew all levels.
     if abs(basis) > 0.02 * spot:
-        log.warning("Basis aberrant ignoré : %+.1f pts sur spot %.0f (%d paires)",
+        log.warning("Aberrant basis ignored: %+.1f pts on spot %.0f (%d pairs)",
                     basis, spot, len(fwds))
         return None
     return basis
@@ -84,18 +81,13 @@ def futures_basis(df: pd.DataFrame, spot: float, today: date | None = None) -> f
 def top_gex_levels(df: pd.DataFrame, n: int = 5,
                    ref_spot: float | None = None,
                    all_expiries: bool = False) -> pd.DataFrame:
-    """Les n strikes au |GEX| le plus fort.
+    """Top n strikes by absolute GEX.
 
-    Par défaut sur l'échéance la plus proche (le 0DTE en séance ; la prochaine
-    séance après la cloche). `all_expiries=True` agrège TOUTES les échéances du
-    df fourni — c'est le point d'entrée `compute_levels` qui fixe alors le
-    périmètre en amont (par bucket).
+    Default is nearest expiry (0DTE in session). `all_expiries=True` aggregates all.
+    `ref_spot` freezes the spot for gamma evaluation (usually prior close).
+    Without it, gamma drifts with current price.
 
-    `ref_spot` fige le spot auquel le gamma est évalué — la clôture de la
-    veille, quand l'open interest a été arrêté. Sans lui, le gamma est repris
-    du dernier pull et les murs se déplacent avec le prix (cf. `gex_at_spot`).
-
-    Retourne strike, gex net, rang (1 = mur le plus fort) et l'expiration utilisée.
+    Returns strike, net gex, rank (1 = strongest), and expiry.
     """
     if df.empty:
         return pd.DataFrame()
@@ -114,10 +106,10 @@ def top_gex_levels(df: pd.DataFrame, n: int = 5,
 
 
 def expected_move(df: pd.DataFrame, spot: float) -> float | None:
-    """Move attendu sur l'échéance la plus proche, via le straddle ATM.
+    """Expected move on nearest expiry via ATM straddle.
 
-    Le prix du straddle à la monnaie EST l'estimation de move du marché, sans
-    hypothèse de modèle. Sert de bornes 1D Min / 1D Max (façon MenthorQ).
+    The ATM straddle price is the market's expected move without model assumptions.
+    Used for 1D Min / 1D Max bounds.
     """
     if df.empty:
         return None
@@ -132,11 +124,10 @@ def expected_move(df: pd.DataFrame, spot: float) -> float | None:
     k_atm = min(common, key=lambda k: abs(k - spot))
 
     def _price(side: pd.DataFrame) -> float | None:
-        """Milieu de fourchette, à défaut le close.
+        """Mid price, fallback to close.
 
-        Les chaînes reconstruites depuis Databento ne portent pas de bid/ask :
-        ce sont des photos de clôture, où le prix de règlement tient lieu de
-        valorisation. Le straddle y reste calculable.
+        Databento chains lack bid/ask; they are closing snapshots where settlement price is used.
+        Straddle remains computable.
         """
         row = side.loc[k_atm]
         if "bid" in side.columns and "ask" in side.columns:
@@ -150,26 +141,21 @@ def expected_move(df: pd.DataFrame, spot: float) -> float | None:
     if not cmid or not pmid:
         return None
     move = float(cmid + pmid)
-    # garde-fou : un move attendu > 10 % du spot sur l'échéance front est
-    # incohérent hors krach — quotes probablement aberrantes.
+    # Guardrail: >10% expected move on front expiry implies aberrant quotes (unless crash).
     return move if 0 < move < 0.10 * spot else None
 
 
 def key_levels(df: pd.DataFrame, spot: float,
                ref_spot: float | None = None,
                all_expiries: bool = False) -> dict[str, float | None]:
-    """Niveaux directionnels (esprit MenthorQ) :
+    """Directional levels:
 
-    - call_wall  : plus forte concentration de gamma call AU-DESSUS du spot
-                   (résistance)
-    - put_support: plus forte concentration de gamma put SOUS le spot (support)
-    - d1_max/d1_min : bornes de move attendu (straddle ATM)
+    - call_wall: highest call gamma concentration ABOVE spot (resistance)
+    - put_support: highest put gamma concentration BELOW spot (support)
+    - d1_max/d1_min: expected move bounds (ATM straddle)
 
-    Contrairement au classement GEX1-5 (non directionnel), ces niveaux ne sont
-    cherchés que du côté où ils font sens comme support/résistance.
-
-    Par défaut sur l'échéance la plus proche ; `all_expiries=True` agrège tout
-    le df fourni (périmètre fixé en amont par `compute_levels`).
+    Unlike GEX1-5, these are only searched on the side where they make sense.
+    Default is nearest expiry; `all_expiries=True` aggregates all.
     """
     out: dict[str, float | None] = {
         "call_wall": None, "put_support": None, "d1_min": None, "d1_max": None,
@@ -178,9 +164,8 @@ def key_levels(df: pd.DataFrame, spot: float,
         return out
     nearest = df["expiry"].min()
     sub = df if all_expiries else df[df["expiry"] == nearest]
-    # Le CLASSEMENT des murs se fait au spot de référence (structure figée) ;
-    # le côté où on les cherche dépend en revanche du spot COURANT, une
-    # résistance n'ayant de sens qu'au-dessus du marché du moment.
+    # Wall RANKING uses reference spot (frozen structure);
+    # Wall DIRECTION (above/below) uses CURRENT spot, since resistance only makes sense above market.
     agg = gex_at_spot(sub, ref_spot) if ref_spot else sub.groupby("strike")["gex"].sum()
 
     above = agg[(agg.index >= spot) & (agg > 0)]
@@ -200,19 +185,15 @@ def key_levels(df: pd.DataFrame, spot: float,
 def compute_levels(chain: pd.DataFrame, structural_spot: float, live_spot: float,
                    bucket: str = "0DTE", today: date | None = None,
                    n: int = 5) -> dict:
-    """POINT D'ENTRÉE UNIQUE des niveaux affichés (murs GEX1-5 + call/put wall).
+    """SINGLE ENTRY POINT for displayed levels (GEX1-5 walls + call/put wall).
 
-    Dashboard, API et bot l'appellent tous, pour ne PLUS JAMAIS diverger sur le
-    spot de référence ou le périmètre d'échéances (le vrai bug identifié).
+    Dashboard, API, and bot all call this to ensure consistency on reference spot and expiries.
 
-    - `structural_spot` : spot figé (clôture veille) → **magnitude** des murs
-      (l'OI est une photo, on ne veut pas que le prix live déplace les murs) ;
-    - `live_spot` : spot courant → **côté** (au-dessus/en dessous = résistance /
-      support) ;
-    - `bucket` : périmètre d'échéances (0DTE / Semaine / Mois / Tout), plus de
-      filtre `expiry.min()` caché — les murs suivent ce qu'affiche l'interface.
+    - `structural_spot`: frozen spot (prior close) -> wall **magnitude**
+    - `live_spot`: current spot -> wall **side** (above/below = resistance/support)
+    - `bucket`: expiry filter (0DTE/Week/Month/All)
 
-    Renvoie {"levels": DataFrame GEX1-n, "keys": dict call_wall/put_support/1D}.
+    Returns {"levels": GEX1-n DataFrame, "keys": call_wall/put_support/1D dict}.
     """
     today = today or datetime.now(ET).date()
     sub = chain[bucket_mask(chain, bucket, today)] if not chain.empty else chain

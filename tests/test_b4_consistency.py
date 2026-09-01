@@ -21,8 +21,8 @@ def test_quality_config_selects_provider_thresholds():
     assert get_quality_config("dxfeed_live").valid_seconds == 5
     assert get_quality_config("native_futures").valid_seconds == 10
 
-    assert evaluate_data_quality(6, None, "dxfeed") == DataQuality.WARNING
-    assert evaluate_data_quality(6, None, "cboe") == DataQuality.VALID
+    assert evaluate_data_quality(6, "dxfeed") == DataQuality.WARNING
+    assert evaluate_data_quality(6, "cboe") == DataQuality.VALID
 
 
 @pytest.mark.parametrize(

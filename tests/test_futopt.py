@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from gex import futopt
+from gex.providers import futopt
 from gex.metrics import ET, gamma_profile, key_levels, top_gex_levels, zero_gamma
 
 

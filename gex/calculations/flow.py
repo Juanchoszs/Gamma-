@@ -7,10 +7,11 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 
-from .. import greeks, rates
+from . import greeks
+from ..infrastructure import rates
 from ..config import CONTRACT_MULTIPLIER, SETTINGS
 from ..domain import DataQuality
-from ..ingest import ChainSnapshot
+from ..domain.models import ChainSnapshot
 
 ET = ZoneInfo("America/New_York")
 YEAR_SECONDS = 365.0 * 24 * 3600
@@ -26,13 +27,10 @@ def put_call_ratios(df: pd.DataFrame) -> dict[str, float]:
     }
 
 def oi_change(prev: pd.DataFrame, cur: pd.DataFrame) -> pd.DataFrame:
-    """Variation d'open interest par strike entre deux séances.
+    """Open interest change by strike between sessions.
 
-    L'OI n'est publié qu'une fois par jour (matin, par l'OCC) : la différence
-    entre deux séances mesure le positionnement NET réellement ouvert ou
-    fermé, à distinguer du gamma résiduel hérité de positions anciennes.
-
-    Retourne un DataFrame strike / d_call / d_put / d_net / oi_call / oi_put.
+    OI is published once daily (by OCC). The difference measures NET positioning changes, unlike residual gamma.
+    Returns strike / d_call / d_put / d_net / oi_call / oi_put.
     """
     if prev is None or prev.empty or cur.empty:
         return pd.DataFrame()
@@ -52,10 +50,9 @@ def oi_change(prev: pd.DataFrame, cur: pd.DataFrame) -> pd.DataFrame:
 
 
 def flow_delta(prev: pd.DataFrame, cur: pd.DataFrame, spot: float) -> dict[str, float]:
-    """Proxy de flux delta entre deux pulls : Δvolume × delta × mult × spot.
+    """Delta flow proxy between pulls: Δvolume × delta × mult × spot.
 
-    Le sens taker (achat/vente) n'est pas observable dans ce feed : c'est un
-    proxy de pression delta-pondérée, pas un vrai order-flow signé.
+    Taker direction (buy/sell) is unobservable in this feed; this is a volume-weighted proxy, not signed flow.
     """
     m = cur.merge(
         prev[["contract", "volume"]].rename(columns={"volume": "volume_prev"}),
@@ -67,10 +64,9 @@ def flow_delta(prev: pd.DataFrame, cur: pd.DataFrame, spot: float) -> dict[str, 
     is_call = m["type"] == "C"
     today = datetime.now(ET).date()
 
-    # Gamma échangé sur l'intervalle : même formule que le GEX, mais pondérée
-    # par le volume du pas de temps au lieu de l'open interest. Cumulé sur la
-    # séance, cela montre si ce qui se traite ajoute du gamma stabilisant
-    # (calls) ou déstabilisant (puts) — un « CVD » du gamma.
+    # Exchanged gamma: GEX formula weighted by volume instead of OI.
+    # Shows if traded volume adds stabilizing (calls) or destabilizing (puts) gamma.
+    # Acts as a "CVD" of gamma.
     gsign = np.where(is_call, 1.0, -1.0)
     gsigned = (dvol * m["gamma_bs"] * gsign
                * CONTRACT_MULTIPLIER * spot ** 2 * 0.01)
@@ -79,11 +75,11 @@ def flow_delta(prev: pd.DataFrame, cur: pd.DataFrame, spot: float) -> dict[str, 
         "flow_calls": float(signed[is_call].sum()),
         "flow_puts": float(signed[~is_call].sum()),
         "flow_0dte": float(signed[m["expiry"] == today].sum()),
-        # gflow_calls est positif, gflow_puts négatif : leur somme est le net
+        # calls positive, puts negative: sum is net
         "gflow_total": float(gsigned.sum()),
         "gflow_calls": float(gsigned[is_call].sum()),
         "gflow_puts": float(gsigned[~is_call].sum()),
         "gflow_0dte": float(gsigned[m["expiry"] == today].sum()),
         "contracts_traded": float(dvol.sum()),
-        "source": "cboe",   # collecté en direct sur la source publique
+        "source": "cboe",   # direct from public source
     }

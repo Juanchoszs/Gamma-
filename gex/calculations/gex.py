@@ -7,37 +7,36 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 
-from .. import greeks, rates
+from . import greeks
+from ..infrastructure import rates
 from ..config import CONTRACT_MULTIPLIER, SETTINGS
 from ..domain import DataQuality
-from ..ingest import ChainSnapshot
+from ..domain.models import ChainSnapshot
 
 ET = ZoneInfo("America/New_York")
 YEAR_SECONDS = 365.0 * 24 * 3600
 EXPIRY_BUCKETS = ["0DTE", "Semaine", "Mois", "Tout"]
 def seconds_to_expiry(expiries: pd.Series, now_et: datetime) -> np.ndarray:
-    """Secondes jusqu'à l'expiration, échéance posée à 16:00 ET.
+    """Seconds to expiry (assumed 16:00 ET).
 
-    Négatif = contrat expiré (0DTE après la cloche) — à exclure.
+    Negative = expired (exclude).
     """
     expiry_dt = pd.to_datetime(expiries).dt.tz_localize(ET) + pd.Timedelta(hours=16)
     return (expiry_dt - now_et).dt.total_seconds().to_numpy()
 
 
 def enrich(snapshot: ChainSnapshot, now_et: datetime | None = None) -> pd.DataFrame:
-    """Ajoute t, greeks calculés (BS sur l'IV du feed) et les colonnes GEX/DEX.
+    """Add t, calculated greeks (BS on feed IV), GEX, and DEX.
 
-    Quand l'IV du feed est nulle/absente (deep ITM sans quote), on retombe
-    sur les Greeks CBOE — leur gamma est ~0 sur ces contrats de toute façon.
+    Falls back to CBOE greeks when IV is missing/zero.
     """
     now_et = now_et or datetime.now(ET)
     df = snapshot.options.copy()
-    # exclut les contrats expirés (dont les 0DTE du jour après 16:00 ET,
-    # dont les quotes résiduelles polluent GEX 0DTE et skew IV)
+    # Exclude expired contracts (incl. 0DTE after 16:00 ET)
     secs = seconds_to_expiry(df["expiry"], now_et)
     df = df[secs > 0].reset_index(drop=True)
     s = snapshot.spot
-    # plancher 5 min pour éviter les gammas explosifs à la cloche
+    # 5 min floor to avoid explosive gamma near close
     t = np.maximum(secs[secs > 0], 300.0) / YEAR_SECONDS
     iv = df["iv"].to_numpy()
     valid = iv > 1e-4
@@ -55,45 +54,22 @@ def enrich(snapshot: ChainSnapshot, now_et: datetime | None = None) -> pd.DataFr
     oi = df["open_interest"].to_numpy()
     sign = np.where(is_call, 1.0, -1.0)
     df["gex"] = sign * g * oi * CONTRACT_MULTIPLIER * s**2 * 0.01
-    # Convention DIFFÉRENTE de celle du GEX, et c'est voulu. Le gamma d'une
-    # option est TOUJOURS positif (call comme put) : sans un signe artificiel,
-    # calls et puts seraient indiscernables — d'où le flip `sign` (dealers
-    # longs calls / courts puts) qui fait tout le travail pour le GEX.
-    # Le delta, lui, a DÉJÀ un signe naturel opposé entre call (positif) et
-    # put (négatif) : réappliquer le MÊME flip différentiel par-dessus (essayé
-    # le 2026-07-27, corrigé le 2026-07-28) rend CHAQUE contrat positif sans
-    # exception — un call devient +δ_call, un put devient -1×δ_put = +|δ_put| :
-    # les deux positifs, plus aucun strike ne peut jamais ressortir négatif.
-    # Ce n'était pas visible sur les tests d'agrégat (qui ne regardent que le
-    # NET), mais sautait aux yeux sur le graphique par strike — barres toutes
-    # bleues, plus aucune rouge.
-    #
-    # La convention correcte pour le DEX (cf. MenthorQ, FlashAlpha) suppose
-    # les dealers COURTS des deux côtés (calls ET puts — hypothèse que les
-    # clients achètent des calls pour l'upside ET des puts en protection),
-    # donc une négation UNIFORME du delta brut, pas un flip différentiel :
-    # court un call -> -δ_call (négatif, cohérent) ; court un put ->
-    # -δ_put = +|δ_put| (positif, cohérent) — les deux types redeviennent
-    # discernables. Le NET reste cohérent avec le récit du GEX : plus de puts
-    # -> dealers plus courts puts -> plus longs delta -> DEX net positif,
-    # exactement comme avant, mais construit sans casser le signe par strike.
+    # GEX assumes dealers long calls / short puts, so we flip signs to make calls/puts comparable.
+    # DEX assumes dealers short calls AND short puts (selling upside, selling protection).
+    # This means a uniform negation of raw delta, NOT a differential flip.
+    # Result: Short call -> -δ_call (negative). Short put -> -δ_put = +|δ_put| (positive).
+    # Net DEX matches GEX narrative: more puts -> dealers shorter puts -> longer delta -> positive Net DEX.
     df["dex"] = -1.0 * d * oi * CONTRACT_MULTIPLIER * s
-    # Spot répété sur chaque ligne : un snapshot persisté devient ainsi
-    # auto-suffisant, et le backtest peut en recalculer les niveaux sans aller
-    # chercher le prix ailleurs. Une constante ne coûte rien en Parquet.
+    # Repeat spot on every row for self-contained persisted snapshots.
     df["spot"] = float(s)
     return df
 
 
 def add_second_order(df: pd.DataFrame, spot: float) -> pd.DataFrame:
-    """Ajoute vanna/charm et leurs expositions en $.
+    """Add vanna/charm and their $ exposures.
 
-    Conventions (mêmes hypothèses de signe que le GEX : dealers longs calls,
-    courts puts) :
-    - vex   : $ de delta par POINT DE VOL (1 %) — l'ampleur du re-hedging
-              quand l'IV bouge d'un point.
-    - cex   : $ de delta par JOUR écoulé — le flux mécanique que les dealers
-              doivent absorber par simple passage du temps.
+    - vex: $ delta per 1% IV change.
+    - cex: $ delta per elapsed day.
     """
     d = df.copy()
     valid = d["iv"] > 1e-4
@@ -116,9 +92,7 @@ def add_second_order(df: pd.DataFrame, spot: float) -> pd.DataFrame:
 
 def bucket_mask(df: pd.DataFrame, bucket: str, today: date) -> pd.Series:
     if bucket == "0DTE":
-        # échéance la plus proche : le vrai 0DTE en séance (elle == today),
-        # la prochaine séance hors séance/week-end (cohérent avec top_gex_levels
-        # et le bandeau de niveaux, qui utilisent aussi l'échéance min).
+        # Nearest expiry (true 0DTE in session, or next available session).
         if df.empty:
             return pd.Series(False, index=df.index)
         return df["expiry"] == df["expiry"].min()
@@ -130,7 +104,7 @@ def bucket_mask(df: pd.DataFrame, bucket: str, today: date) -> pd.Series:
 
 
 def exposure_by_strike(df: pd.DataFrame, col: str) -> pd.DataFrame:
-    """Agrège gex/dex par strike, calls et puts séparés + net."""
+    """Aggregate gex/dex by strike, splitting calls/puts and net."""
     pivot = df.pivot_table(index="strike", columns="type", values=col, aggfunc="sum").fillna(0.0)
     for side in ("C", "P"):
         if side not in pivot:
@@ -141,12 +115,10 @@ def exposure_by_strike(df: pd.DataFrame, col: str) -> pd.DataFrame:
 
 def gex_by_strike_weighted(df: pd.DataFrame, spot: float,
                            weight_col: str = "open_interest") -> pd.Series:
-    """GEX par strike, pondéré par l'open interest ou par le volume du jour.
+    """GEX by strike, weighted by open interest or daily volume.
 
-    Les deux racontent des choses différentes : l'open interest décrit le
-    positionnement installé, le volume ce qui se traite aujourd'hui et donc se
-    couvre maintenant. Superposés, l'écart entre les deux signale un strike qui
-    prend de l'importance en séance sans figurer dans la structure de la veille.
+    OI shows established positioning, volume shows current session activity.
+    Differences highlight intraday importance shifts.
     """
     if df.empty or weight_col not in df.columns:
         return pd.Series(dtype=float)

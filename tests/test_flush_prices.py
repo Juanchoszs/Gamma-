@@ -11,7 +11,7 @@ import time
 import pandas as pd
 
 from gex import scheduler, store
-from gex.rtquote import Bar
+from gex.providers.rtquote import Bar
 
 
 def test_flush_prices_vide_les_deux_sources(tmp_path, monkeypatch):

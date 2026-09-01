@@ -6,9 +6,9 @@ from datetime import datetime
 
 from .. import metrics, store
 from ..config import SETTINGS, UNDERLYINGS
-from ..ingest import fetch_chain, fetch_index_spot
+from gex.providers.ingest import fetch_chain, fetch_index_spot
 from ..metrics import ET
-from ..state import STATE
+from ..domain.state import STATE
 
 log = logging.getLogger(__name__)
 

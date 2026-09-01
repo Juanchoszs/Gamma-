@@ -9,7 +9,7 @@ from __future__ import annotations
 import time
 from datetime import date
 
-from gex.rtquote import (
+from gex.providers.rtquote import (
     PUBLIC_DEMO_URL,
     PublicDelayedQuotes,
     RealtimeQuotes,
@@ -180,7 +180,7 @@ def test_public_delayed_quotes_ne_demarre_pas_si_compte_reel(monkeypatch):
     """Le repli n'a de sens QUE sans identifiants — un compte réel doit
     garder l'exclusivité du flux temps réel, pas tourner les deux en même
     temps pour rien."""
-    import gex.rtquote as rtq
+    import gex.providers.rtquote as rtq
 
     monkeypatch.setattr(rtq, "credentials_present", lambda: True)
     q = PublicDelayedQuotes()
@@ -195,7 +195,7 @@ def test_future_non_resolu_est_omis_pas_rabattu_sur_le_ticker(monkeypatch):
     enregistrait 74,75 comme prix du future ES dans les bougies de la Heatmap
     (constaté le 2026-07-30). Mieux vaut aucun spot qu'un spot d'un autre
     instrument."""
-    import gex.rtquote as rtq
+    import gex.providers.rtquote as rtq
 
     rtq._FUTURE_STREAM_CACHE.clear()
 
@@ -215,7 +215,7 @@ def test_symbole_future_resolu_est_mis_en_cache(monkeypatch):
     """Le cache existe pour éviter les 429 : resolve_symbols,
     futopt._reference_spot et flowtape._build_universe interrogeaient tous
     l'API coup sur coup à chaque démarrage."""
-    import gex.rtquote as rtq
+    import gex.providers.rtquote as rtq
 
     rtq._FUTURE_STREAM_CACHE.clear()
     appels = []

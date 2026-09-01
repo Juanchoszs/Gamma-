@@ -30,7 +30,7 @@ def _identifiants(monkeypatch, cid="cid", secret="sec", refresh=None):
     # les VRAIES variables d'environnement — vert sur un poste où un compte
     # tastytrade est configuré, rouge en CI (env vierge). Le test doit être
     # hermétique.
-    monkeypatch.setattr("gex.rtquote._env", lire)
+    monkeypatch.setattr("gex.providers.rtquote._env", lire)
     monkeypatch.setattr("gex.tt_auth._env", lire)
 
 

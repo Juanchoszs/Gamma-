@@ -6,7 +6,8 @@ import pytest
 
 from gex import metrics
 from gex.config import CONTRACT_MULTIPLIER
-from gex.ingest import ChainSnapshot, parse_occ
+from gex.domain.models import ChainSnapshot
+from gex.providers.ingest import parse_occ
 from gex.metrics import ET
 
 

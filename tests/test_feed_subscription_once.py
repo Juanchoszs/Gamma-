@@ -19,7 +19,7 @@ import json
 
 import pytest
 
-from gex import futopt, rtquote
+from gex.providers import futopt, rtquote
 
 
 class FakeWS:

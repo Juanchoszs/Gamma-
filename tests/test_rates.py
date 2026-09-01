@@ -97,7 +97,7 @@ def test_metrics_utilise_le_taux_courant(monkeypatch):
 
     import numpy as np
     import pandas as pd
-    from gex.ingest import ChainSnapshot
+    from gex.domain.models import ChainSnapshot
     snap = ChainSnapshot(
         symbol="SPX", spot=7400.0,
         feed_timestamp=pd.Timestamp("2026-07-29 10:00"),

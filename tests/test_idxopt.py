@@ -9,8 +9,8 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from gex import idxopt
-from gex.futopt import _all_have_iv
+from gex.providers import idxopt
+from gex.providers.futopt import _all_have_iv
 
 
 def _nested_payload() -> dict:

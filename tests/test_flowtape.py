@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from gex.flowtape import FlowTape, option_type_of
+from gex.providers.flowtape import FlowTape, option_type_of
 
 
 def _tape() -> FlowTape:
@@ -264,7 +264,7 @@ def test_derive_detectee_au_dela_du_seuil(monkeypatch):
     de la moitié de la demi-fenêtre, l'univers doit être reconstruit. Sinon un
     mouvement rapide fait sortir le prix de la bande souscrite (NQ, 3 min sur
     550 le 2026-07-29)."""
-    import gex.flowtape as ft
+    import gex.providers.flowtape as ft
 
     t = ft.FlowTape()
     t._center = {"SPX": 7400.0}
@@ -286,7 +286,7 @@ def test_derive_detectee_au_dela_du_seuil(monkeypatch):
 def test_derive_ignore_un_spot_live_absent(monkeypatch):
     """Un sous-jacent sans cotation live (price() = None) ne doit jamais
     déclencher de recentrage — sinon un flux muet reconstruirait en boucle."""
-    import gex.flowtape as ft
+    import gex.providers.flowtape as ft
 
     t = ft.FlowTape()
     t._center = {"SPX": 7400.0, "NQ": 27000.0}
@@ -298,8 +298,8 @@ def test_derive_ignore_un_spot_live_absent(monkeypatch):
 def test_build_universe_fixe_le_centre(monkeypatch):
     """Le centre est REMPLACÉ à chaque construction, pas cumulé : c'est le
     référentiel de la fenêtre courante."""
-    import gex.flowtape as ft
-    from gex import futopt, idxopt
+    import gex.providers.flowtape as ft
+    from gex.providers import futopt, idxopt
 
     t = ft.FlowTape()
     t._center = {"SPX": 1.0, "OBSOLETE": 2.0}      # ancien état à écraser
@@ -324,7 +324,7 @@ def test_build_universe_fixe_le_centre(monkeypatch):
     ("./Q5CN26P27960:XCME", 27960.0, "P"),
 ])
 def test_strike_lu_dans_le_symbole(sym, strike, typ):
-    from gex.flowtape import strike_of
+    from gex.providers.flowtape import strike_of
     assert strike_of(sym) == strike
 
 
@@ -376,7 +376,7 @@ def test_recent_prints_cote_indetermine_marque():
 
 
 def test_recent_prints_borne_au_tampon():
-    from gex.flowtape import PRINT_BUFFER
+    from gex.providers.flowtape import PRINT_BUFFER
     t = FlowTape()
     t._by_stream = {".SPXW260729C7400": "SPX"}
     for i in range(PRINT_BUFFER + 50):

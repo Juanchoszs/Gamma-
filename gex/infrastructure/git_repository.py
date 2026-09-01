@@ -4,10 +4,11 @@ from __future__ import annotations
 import logging
 import subprocess
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from ..config import SETTINGS
-from ..metrics import ET
 
+ET = ZoneInfo("America/New_York")
 log = logging.getLogger(__name__)
 
 

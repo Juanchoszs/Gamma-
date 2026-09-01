@@ -8,9 +8,8 @@ from . import providers
 
 
 def _default_data_dir() -> Path:
-    """data/ à la racine du dépôt si on tourne depuis les sources, sinon dans
-    le dossier courant (cas d'un `pip install` : le code vit dans
-    site-packages, où l'on n'écrit pas)."""
+    """data/ at the repo root when running from source; otherwise in cwd
+    (for `pip install`: code lives in site-packages where we don't write)."""
     # gex/config/__init__.py → parents[2] is the repository root.
     root = Path(__file__).resolve().parents[2]
     if (root / ".git").exists() or (root / "pyproject.toml").exists():
@@ -20,109 +19,94 @@ def _default_data_dir() -> Path:
 
 DATA_DIR = _default_data_dir()
 
-# Taux sans risque annualisé, REPLI uniquement : le calcul live charge le SOFR
-# du jour via gex/rates (current_rate). Cette constante ne sert plus que si
-# l'API NY Fed est injoignable, et pour la reconstruction historique
-# (backfill), où le taux du jour serait anachronique.
+# Annualized risk-free rate, FALLBACK only: live calculations use the daily SOFR via gex/rates (current_rate).
+# This constant is only used when the NY Fed API is unreachable or for historical backfill.
 RISK_FREE_RATE = 0.045
 
-# Multiplicateur de contrat (SPX, NDX, SPY, QQQ : 100).
+# Contract multiplier (SPX, NDX, SPY, QQQ: 100).
 CONTRACT_MULTIPLIER = 100
 
 
 @dataclass(frozen=True)
 class Underlying:
-    key: str            # identifiant interne ("SPX")
-    cboe_symbol: str    # symbole endpoint CBOE ("_SPX")
-    label: str          # libellé affiché ("SPX / ES")
-    future: str | None = None   # future CME associé, pour la conversion de basis
-    # Famille d'indice : la transposition entre familles est possible mais son
-    # ratio dérive dans le temps (cf. gex/scales.py).
+    key: str            # internal identifier ("SPX")
+    cboe_symbol: str    # CBOE endpoint symbol ("_SPX")
+    label: str          # display label ("SPX / ES")
+    future: str | None = None   # associated CME future, for basis conversion
+    # Index family: transposition between families is possible but the ratio drifts over time (see gex/scales.py).
     family: str = "SP"
     enabled: bool = True
-    # "target"      : sous-jacent analysé, visible dans l'interface
-    # "constituent" : collecté uniquement pour alimenter les niveaux de
-    #                 confluence (Blind Spots) — jamais proposé à l'affichage,
-    #                 et pullé plus lentement car ses murs reposent sur l'open
-    #                 interest, publié une fois par jour
-    # "context"     : pas une chaîne d'options — juste un ticker de contexte
-    #                 (VIX) pullé à part (scheduler.pull_vix) et absent de
-    #                 pull_all. Listé ici uniquement pour que
-    #                 rtquote.resolve_symbols l'inclue dans l'abonnement
-    #                 dxFeed du compte courtier, quand un est configuré.
+    # "target"      : analyzed underlying, visible in the interface
+    # "constituent" : collected only to feed confluence levels (Blind Spots) —
+    #                 never shown in the UI, pulled more slowly because its walls
+    #                 rely on OI which is published once per day
+    # "context"     : not an options chain — just a context ticker
+    #                 (VIX) pulled separately (scheduler.pull_vix) and absent from
+    #                 pull_all. Listed here only so that
+    #                 rtquote.resolve_symbols includes it in the dxFeed subscription
+    #                 when a broker account is configured.
     role: str = "target"
-    # Cibles que ce constituant informe. Un titre présent dans deux indices
-    # (AAPL, MSFT…) en alimente deux.
+    # Targets this constituent informs. A stock in two indices (AAPL, MSFT…) feeds both.
     links: tuple[str, ...] = ()
-    # "cboe"    : chaîne pullée depuis l'endpoint CBOE toutes les 60 s
-    #             (gex/ingest.py), boucle pull_all normale.
-    # "futopt"  : chaîne d'options sur future lue nativement via dxFeed
-    #             (gex/futopt.py). Une collecte prend ~90 s par sous-jacent —
-    #             hors de question dans la boucle à 60 s : pull_native_options
-    #             s'en charge séparément, toutes les 15 min, dans son propre
-    #             thread (cf. scheduler.py). pull_all les ignore entièrement.
+    # "cboe"    : chain pulled from the CBOE endpoint every 60s (gex/ingest.py), normal pull_all loop.
+    # "futopt"  : options on futures, read natively via dxFeed
+    #             (gex/futopt.py). A pull takes ~90s per underlying —
+    #             too slow for the 60s loop: pull_native_options handles it
+    #             separately every 15 min in its own thread (see scheduler.py). pull_all ignores them.
     source: str = "cboe"
 
 
 UNDERLYINGS: dict[str, Underlying] = {
     u.key: u
     for u in [
-        # libellés = simples tickers : l'échelle d'affichage (ES/NQ) se choisit
-        # dans son propre sélecteur, la mentionner ici ferait doublon
+        # Labels are simple tickers: the display scale (ES/NQ) has its own selector, mentioning it here would be redundant.
         Underlying("SPX", "_SPX", "SPX", future="ES", family="SP"),
         Underlying("NDX", "_NDX", "NDX", future="NQ", family="ND"),
-        # ETF : pas de future associé (le sélecteur Indice/Futures est donc
-        # désactivé), options américaines, et sous-jacents versant un dividende
-        # — voir la note sur l'approximation q=0 dans les limites du README.
+        # ETFs: no associated future (Index/Futures selector disabled), American options,
+        # and dividend-paying underlyings — see the q=0 approximation note in the README.
         Underlying("SPY", "SPY", "SPY", family="SP"),
         Underlying("QQQ", "QQQ", "QQQ", family="ND"),
 
-        # Options sur future, lues nativement (gex/futopt.py) plutôt que
-        # transposées depuis NDX/SPX : la structure de gamma propre au marché
-        # des futures diverge de celle de l'indice cash — confirmé le
-        # 2026-07-27, écart de 160 pts sur le Zero Gamma NQ en transposé
-        # contre 12 pts en natif face à une source tierce. `cboe_symbol` est
-        # un placeholder ignoré : ces deux cibles ne passent jamais par la
-        # boucle CBOE (source="futopt").
+        # Futures options, read natively (gex/futopt.py) instead of transposing from NDX/SPX:
+        # the gamma structure of the futures market diverges from the cash index — confirmed 2026-07-27,
+        # 160pt difference on NQ Zero Gamma (transposed vs. native vs. a third-party source). `cboe_symbol` is
+        # a placeholder: these two targets never go through the CBOE loop (source="futopt").
         Underlying("NQ", "NQ", "NQ", family="ND", source="futopt"),
         Underlying("ES", "ES", "ES", family="SP", source="futopt"),
 
-        # --- Constituants (Blind Spots) -------------------------------------
-        # Leurs murs de gamma n'ont d'intérêt que projetés sur l'indice qu'ils
-        # composent : un mur sur NVDA pèse sur le NQ parce que le titre pèse
-        # ~9 % de l'indice et que ceux qui couvrent ce gamma tradent NVDA.
-        # C'est ce lien mécanique qui distingue un constituant d'un actif
-        # simplement corrélé (l'or face à l'ES n'a pas cette propriété).
+        # --- Constituents (Blind Spots) ------------------------------------
+        # Their gamma walls are only meaningful projected onto the index they compose:
+        # a wall on NVDA weighs on NQ because the stock is ~9% of the index and
+        # those hedging that gamma trade NVDA. This mechanical link distinguishes
+        # a constituent from a merely correlated asset (gold vs ES has no such property).
         *[Underlying(k, k, k, family="ND", role="constituent",
                      links=("NDX", "SPX"))
           for k in ("SMH", "NVDA", "AVGO", "AMD", "MU", "TSM")],
-        # Méga-capitalisations : présentes dans les deux indices, avec un poids
-        # supérieur dans le Nasdaq-100
+        # Mega-caps: present in both indices, with higher weight in Nasdaq-100
         *[Underlying(k, k, k, family="ND", role="constituent",
                      links=("NDX", "SPX"))
           for k in ("AAPL", "MSFT", "AMZN", "META", "GOOGL", "TSLA")],
-        # Secteurs absents du Nasdaq-100 : ils n'informent que le S&P
+        # Sectors absent from Nasdaq-100: they only inform S&P
         *[Underlying(k, k, k, family="SP", role="constituent", links=("SPX",))
           for k in ("XLF", "XLE")],
 
-        # Contexte (get_market_context, MCP) : `cboe_symbol` est un
-        # placeholder ignoré, VIX ne passe jamais par la boucle CBOE
-        # (cf. role="context" et scheduler.pull_vix, qui utilise directement
-        # le symbole CBOE "_VIX").
+        # Context (get_market_context, MCP): `cboe_symbol` is a placeholder, VIX never
+        # goes through the CBOE loop (see role="context" and scheduler.pull_vix,
+        # which uses CBOE symbol "_VIX" directly).
         Underlying("VIX", "VIX", "VIX", family="SP", role="context"),
     ]
 }
 
 
 def targets() -> list[Underlying]:
-    """Sous-jacents analysés — ceux que l'interface propose."""
+    """Analyzed underlyings — those exposed in the interface."""
     return [u for u in UNDERLYINGS.values() if u.enabled and u.role == "target"]
 
 
 def constituents(for_target: str | None = None) -> list[Underlying]:
-    """Constituants collectés pour les niveaux de confluence.
+    """Constituents collected for confluence levels.
 
-    `for_target` restreint à ceux qui informent une cible donnée.
+    `for_target` restricts to those that inform a given target.
     """
     out = [u for u in UNDERLYINGS.values()
            if u.enabled and u.role == "constituent"]
@@ -133,30 +117,26 @@ def constituents(for_target: str | None = None) -> list[Underlying]:
 
 @dataclass
 class Settings:
-    # Intervalle de pull des flux (secondes). 60 s = résolution max utile
-    # (le feed CBOE est délayé 15 min à la source, ceci ne change que la
-    # résolution d'échantillonnage, pas le délai).
+    # Pull interval (seconds). 60s = max useful resolution
+    # (CBOE feed is 15 min delayed at the source; this only changes sampling resolution, not the delay).
     flow_interval_s: int = 60
-    # Intervalle de persistance d'un snapshot complet de chaîne (secondes).
+    # Interval for persisting a full chain snapshot (seconds).
     snapshot_interval_s: int = 600
-    # Cadence de pull des constituants. Bien plus lente que les cibles : leurs
-    # murs reposent sur l'open interest, publié une fois par jour. Les puller
-    # toutes les 60 s n'apporterait rien et multiplierait par quatre la charge
-    # sur le CDN gratuit de CBOE comme le volume d'écriture Parquet.
+    # Constituent pull cadence. Much slower than targets: their walls rely on OI, published once per day.
+    # Pulling every 60s adds nothing and quadruples CBOE CDN load and parquet write volume.
     constituent_interval_s: int = 600
-    # Persistance des snapshots de constituants. Très espacée : leurs murs
-    # dépendent de l'open interest, publié une fois par jour — en garder une
-    # photo toutes les 10 min ferait ~270 Mo/jour de doublons pour rien.
+    # Constituent snapshot persistence. Very sparse: OI-based walls change once per day.
+    # Saving a snapshot every 10 min would produce ~270MB/day of redundant data.
     constituent_snapshot_interval_s: int = 7200
-    # Fenêtre de strikes affichée autour du spot (fraction).
+    # Display strike window around spot (fraction).
     strike_window: float = 0.10
-    # Grille de recherche du zero gamma autour du spot (fraction, pas).
+    # Zero gamma search grid around spot (fraction, step count).
     zg_range: float = 0.08
     zg_steps: int = 161
-    # Ne puller que pendant les heures de marché US (ET).
-    market_hours_only: bool = True
-    # Commit+push automatique du repo git data/ (historique+flux) après la
-    # clôture (16:20 ET). Sans effet si data/ n'est pas un repo git avec remote.
+    # Only pull during US market hours (ET).
+    market_hours_only: bool = False
+    # Auto commit+push data/ git repo (history+flows) after close (16:20 ET).
+    # No effect if data/ is not a git repo with a remote.
     auto_push_data: bool = True
     data_dir: Path = field(default_factory=lambda: DATA_DIR)
 

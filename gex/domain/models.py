@@ -51,7 +51,7 @@ class SummaryMetrics:
     pc_volume: float
     net_gex_0dte: float = 0.0
     basis: Optional[float] = None
-    net_dex: float = 0.0
+    net_dex: Optional[float] = None
     source: str = "cboe"
     data_quality: DataQuality = DataQuality.VALID
     age_seconds: Optional[float] = None

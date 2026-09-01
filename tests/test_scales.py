@@ -80,7 +80,7 @@ def test_basis_mesure_en_seance(monkeypatch):
     """En séance, indice et future cotent ensemble : leur écart EST le basis,
     et le spot transposé retombe exactement sur le prix du future."""
     from gex import app as A
-    from gex.rtquote import QUOTES
+    from gex.providers.rtquote import QUOTES
 
     live = {"NDX": 28128.34, "NQ": 28306.25, "SPX": 7407.68, "ES": 7444.12}
     monkeypatch.setattr(QUOTES, "price", lambda k: live.get(k))
@@ -99,7 +99,7 @@ def test_basis_fige_hors_seance(monkeypatch):
     alors qu'ils décrivent des positions arrêtées la veille.
     """
     from gex import app as A
-    from gex.rtquote import QUOTES
+    from gex.providers.rtquote import QUOTES
 
     monkeypatch.setattr(A, "market_is_open", lambda *a, **k: False)
     appels = []
@@ -111,7 +111,7 @@ def test_basis_fige_hors_seance(monkeypatch):
 def test_repli_sur_le_basis_de_la_chaine_sans_flux(monkeypatch):
     """Sans flux temps réel, la transposition doit continuer de fonctionner."""
     from gex import app as A
-    from gex.rtquote import QUOTES
+    from gex.providers.rtquote import QUOTES
 
     monkeypatch.setattr(QUOTES, "price", lambda k: None)
     xf, _, mode = A._transform_for("NDX", "NQ")

@@ -1,17 +1,18 @@
-"""GEX dashboard application."""
+"""Backward compatibility: gex.mcp_server -> gex.api.mcp"""
 from __future__ import annotations
 
 import json
 from datetime import datetime
+from datetime import time as dt_time
 from pathlib import Path
 
 import pandas as pd
 from mcp.server.fastmcp import FastMCP
 
-from . import store
-from .config import SETTINGS, UNDERLYINGS
-from .metrics import ET, regime_read
-from .rtquote import QUOTES, credentials_present
+from .. import store
+from ..config import SETTINGS, UNDERLYINGS
+from ..metrics import ET, regime_read
+from ..providers.rtquote import QUOTES, credentials_present
 
 mcp = FastMCP("gex-data")
 
@@ -209,20 +210,32 @@ def get_history(symbol: str = "SPX", last_n: int = 50) -> str:
 @mcp.tool()
 def get_reports(last_n: int = 5) -> str:
     """Return the latest scheduled-task reports."""
-    from .logsetup import read_reports
+    from ..infrastructure.logsetup import read_reports
     return read_reports(last_n)
 
 
 @mcp.tool()
 def get_log_tail(lines: int = 50, level: str | None = None) -> str:
     """Return the tail of the technical log, optionally filtered by level."""
-    from .logsetup import LOG_FILE
+    from ..infrastructure.logsetup import LOG_FILE
     if not LOG_FILE.exists():
         return "Aucun log (le dashboard n'a pas encore tourné avec la journalisation)."
     rows = LOG_FILE.read_text(encoding="utf-8", errors="replace").splitlines()
     if level:
         rows = [r for r in rows if f" {level.upper()} " in r]
     return "\n".join(rows[-lines:]) or "Aucune ligne correspondante."
+
+
+# For backward compatibility with tests that access the functions directly
+def _current_vix() -> float | None:
+    """Return current VIX from live or delayed source."""
+    vix_live = QUOTES.price("VIX") if credentials_present() else None
+    if vix_live is not None:
+        return float(vix_live)
+    hist = store.load_index_spot("vix")
+    if not hist.empty:
+        return float(hist.sort_values("timestamp")["vix"].iloc[-1])
+    return None
 
 
 def main() -> None:

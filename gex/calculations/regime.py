@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
 
-from .. import greeks, rates
+from . import greeks
+from ..infrastructure import rates
 from ..config import CONTRACT_MULTIPLIER, SETTINGS
 from ..domain import DataQuality
-from ..ingest import ChainSnapshot
+from ..domain.models import ChainSnapshot, SummaryMetrics
 
 ET = ZoneInfo("America/New_York")
 YEAR_SECONDS = 365.0 * 24 * 3600
@@ -19,42 +19,6 @@ from .gex import bucket_mask
 from .levels import futures_basis
 from .gamma_flip import zero_gamma
 from .flow import put_call_ratios
-
-@dataclass
-class SummaryMetrics:
-    timestamp: datetime
-    symbol: str
-    spot: float
-    net_gex: float
-    zero_gamma: float | None
-    pc_oi: float
-    pc_volume: float
-    net_gex_0dte: float = 0.0
-    basis: float | None = None
-    net_dex: float | None = None
-    # Provenance of the row. Determines what can be shared: "cboe" =
-    # free public source, redistributable; "databento" = paid source
-    # under personal use license, NOT redistributable.
-    source: str = "cboe"
-    data_quality: DataQuality = DataQuality.VALID
-    age_seconds: float | None = None
-
-    def as_row(self) -> dict:
-        return {
-            "timestamp": self.timestamp,
-            "symbol": self.symbol,
-            "spot": self.spot,
-            "net_gex": self.net_gex,
-            "zero_gamma": self.zero_gamma,
-            "pc_oi": self.pc_oi,
-            "pc_volume": self.pc_volume,
-            "net_gex_0dte": self.net_gex_0dte,
-            "basis": self.basis,
-            "net_dex": self.net_dex,
-            "source": self.source,
-            "data_quality": self.data_quality.value,
-            "age_seconds": self.age_seconds,
-        }
 
 
 def summarize(snapshot: ChainSnapshot, df: pd.DataFrame,
@@ -102,6 +66,7 @@ def summarize(snapshot: ChainSnapshot, df: pd.DataFrame,
         net_gex_0dte=float(df.loc[bucket_mask(df, "0DTE", today), "gex"].sum()),
         basis=futures_basis(df, snapshot.spot, today) if with_basis else None,
         net_dex=net_dex,
+        source="cboe",  # CBOE is the default source for regime calculations
         data_quality=data_quality,
         age_seconds=age_seconds,
     )
@@ -139,30 +104,17 @@ def _evaluate_data_quality(
 
 def regime_read(net_gex: float, net_dex: float,
                  dex_history: pd.Series | None = None) -> dict:
-    """Lecture croisée Gamma/Delta : mécanique de couverture des dealers, pas
-    un signal d'entrée. Deux axes indépendants :
+    """Cross reading Gamma/Delta: dealer hedging mechanics.
 
-    - GEX (comment un mouvement se comporte une fois lancé) : positif = les
-      dealers vendent les hausses et achètent les baisses, donc freinent ;
-      négatif = l'inverse, donc amplifient.
-    - DEX (le sens de l'obligation de couverture latente des dealers, sous
-      l'hypothèse longs calls / courts puts, cf. `enrich`) : positif = ils
-      sont structurellement LONGS delta (côté puts vendus qui s'enfoncent
-      dans la monnaie) → pression de couverture VENDEUSE latente, biais
-      baissier si un mouvement démarre. Négatif = l'inverse (short delta),
-      pression ACHETEUSE latente, biais haussier.
-
-    Ni l'un ni l'autre ne dit SI un mouvement démarre, ni dans quel sens il
-    démarre — seulement sa nature probable s'il se produit. `dex_history`
-    (série de |net_dex| passés du même sous-jacent) sert uniquement à situer
-    l'ampleur actuelle par rang percentile ; sans historique suffisant (< 20
-    points), la magnitude est laissée à None plutôt que devinée.
+    - GEX: positive = dealers hedge against trend (dampening);
+      negative = dealers hedge with trend (accelerating).
+    - DEX: positive = dealers are long delta -> latent selling pressure (downward bias).
+      Negative = short delta -> latent buying pressure (upward bias).
     """
     gex_frein = net_gex >= 0
-    dex_long = net_dex >= 0   # dealers structurellement longs delta
+    dex_long = net_dex >= 0   # dealers structurally long delta
     sens_delta = "long" if dex_long else "short"
-    # codes neutres (pas de mot figé dans une langue) : gex/i18n.py les
-    # traduit en "vendeuse"/"acheteuse" (fr) ou "selling"/"buying" (en)
+    # language-agnostic codes (see gex/i18n.py)
     pression_code = "sell" if dex_long else "buy"
     biais_code = "down" if dex_long else "up"
 

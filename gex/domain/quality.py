@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from enum import Enum
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from typing import Optional
 
 
@@ -53,60 +52,6 @@ class DataQualityConfig:
 DEFAULT_QUALITY_CONFIG = DataQualityConfig()
 
 
-class DataQualityEvaluator:
-    """Centralized data quality evaluation.
-
-    Single authoritative location for assessing data quality from
-    provider timestamps, snapshot age, and data completeness.
-    """
-
-    def __init__(self, config: Optional[DataQualityConfig] = None):
-        self.config = config or DEFAULT_QUALITY_CONFIG
-
-    def evaluate(
-        self,
-        age_seconds: Optional[float],
-        provider: str,
-        feed_timestamp: Optional[datetime] = None,
-        has_required_fields: bool = True,
-        is_expired_contract: bool = False,
-    ) -> DataQuality:
-        """Evaluate data quality based on age, provider, and completeness.
-
-        Args:
-            age_seconds: Seconds since data was fetched
-            provider: Data source identifier (cboe, dxfeed, native, etc.)
-            feed_timestamp: Original provider timestamp
-            has_required_fields: Whether all required fields are present
-            is_expired_contract: Whether the contract has expired
-
-        Returns:
-            DataQuality enum value
-        """
-        if is_expired_contract:
-            return DataQuality.EXPIRED
-
-        if age_seconds is None:
-            return DataQuality.INVALID
-
-        if not has_required_fields:
-            return DataQuality.INVALID
-
-        thresholds = self._get_thresholds(provider)
-        if age_seconds <= thresholds.valid_seconds:
-            return DataQuality.VALID
-        elif age_seconds <= thresholds.warning_seconds:
-            return DataQuality.WARNING
-        elif age_seconds <= thresholds.stale_seconds:
-            return DataQuality.STALE
-        else:
-            return DataQuality.EXPIRED
-
-    def _get_thresholds(self, provider: str):
-        """Get quality thresholds for a provider."""
-        return get_quality_config(provider, self.config)
-
-
 def get_quality_config(
     provider: str, config: Optional[DataQualityConfig] = None
 ) -> ProviderQualityConfig:
@@ -119,18 +64,40 @@ def get_quality_config(
 
 def evaluate_data_quality(
     age_seconds: Optional[float],
-    feed_timestamp: Optional[datetime],
     provider: str,
+    feed_timestamp: Optional[datetime] = None,
     has_required_fields: bool = True,
     is_expired_contract: bool = False,
     config: Optional[DataQualityConfig] = None,
 ) -> DataQuality:
-    """Module-level convenience function for backward compatibility."""
-    evaluator = DataQualityEvaluator(config)
-    return evaluator.evaluate(
-        age_seconds=age_seconds,
-        provider=provider,
-        feed_timestamp=feed_timestamp,
-        has_required_fields=has_required_fields,
-        is_expired_contract=is_expired_contract,
-    )
+    """Evaluate data quality based on age, provider, and completeness.
+
+    Args:
+        age_seconds: Seconds since data was fetched
+        provider: Data source identifier (cboe, dxfeed, native, etc.)
+        feed_timestamp: Original provider timestamp (unused but kept for compatibility)
+        has_required_fields: Whether all required fields are present
+        is_expired_contract: Whether the contract has expired
+        config: Optional custom quality configuration
+
+    Returns:
+        DataQuality enum value
+    """
+    if is_expired_contract:
+        return DataQuality.EXPIRED
+
+    if age_seconds is None:
+        return DataQuality.INVALID
+
+    if not has_required_fields:
+        return DataQuality.INVALID
+
+    thresholds = get_quality_config(provider, config)
+    if age_seconds <= thresholds.valid_seconds:
+        return DataQuality.VALID
+    elif age_seconds <= thresholds.warning_seconds:
+        return DataQuality.WARNING
+    elif age_seconds <= thresholds.stale_seconds:
+        return DataQuality.STALE
+    else:
+        return DataQuality.EXPIRED

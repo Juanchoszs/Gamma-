@@ -4,17 +4,18 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime, timedelta
 
-from .. import flowtape, roll, store
+from ..providers import flowtape
+from . import roll
+from .. import store
 from ..metrics import ET
-from ..rtquote import PUBLIC_QUOTES, QUOTES
-from ..tickcapture import CAPTURE
+from gex.providers.rtquote import PUBLIC_QUOTES, QUOTES
+from gex.providers.tickcapture import CAPTURE
 
 log = logging.getLogger(__name__)
 
 
 def _flush_bars(bars: list, source: str) -> None:
-    """Écrit sur disque les bougies 1 min achevées, quelle que soit la
-    source (compte courtier ou repli public délayé — cf. flush_prices)."""
+    """Write completed 1-min bars to disk, regardless of source (broker or delayed public fallback)."""
     if not bars:
         return
     by_symbol: dict[str, list[dict]] = {}
@@ -28,37 +29,30 @@ def _flush_bars(bars: list, source: str) -> None:
     for symbol, rows in by_symbol.items():
         try:
             store.append_prices(symbol, rows, rows[0]["timestamp"])
-        except Exception:  # noqa: BLE001 — une écriture ratée ne doit rien casser
-            log.exception("Échec écriture des prix %s", symbol)
+        except Exception:  # noqa: BLE001 — a write failure must not break anything
+            log.exception("Failed to write prices for %s", symbol)
 
 
 def flush_prices() -> None:
-    """Écrit sur disque les bougies 1 min achevées par le flux temps réel.
+    """Write completed 1-min bars from the real-time feed.
 
-    Sans identifiants courtier, `QUOTES.drain_bars()` renvoie une liste vide
-    (la couche temps réel payante est inerte), mais `PUBLIC_QUOTES` — le
-    repli gratuit délayé sur NQ/ES (cf. rtquote.PublicDelayedQuotes) —
-    construit ses propres bougies de la même façon et doit être vidé lui
-    aussi : sans cette ligne, ses bougies s'accumulaient en mémoire sans
-    jamais être écrites, et le Heatmap retombait sur le repli grossier
-    (un point par pull, ~10 min) même là où un spot délayé existait déjà.
+    Without broker credentials, `QUOTES.drain_bars()` returns an empty list.
+    `PUBLIC_QUOTES` (the free delayed NQ/ES fallback) also builds bars the same way
+    and must be drained too: otherwise its bars accumulate in memory and the heatmap
+    falls back to coarse snapshot resolution (~10 min) even when delayed data is available.
 
-    Provenance marquée à l'écriture : "dxfeed" (courtier, licence usage
-    personnel non redistribuable) ou "dxfeed_public" (flux démo public,
-    délayé ~15-20 min) — les deux exclues de l'export par défaut (cf.
-    gex/export.py, qui n'autorise que source == "cboe"), mais distinguées
-    pour ne jamais laisser croire que l'une est l'autre.
+    Source tagged at write time: `"dxfeed"` (broker, personal use only) or
+    `"dxfeed_public"` (public demo, ~15-20 min delay) — both excluded from export by default
+    (see gex/export.py), but kept distinct to avoid conflation.
     """
     _flush_bars(QUOTES.drain_bars(), "dxfeed")
     _flush_bars(PUBLIC_QUOTES.drain_bars(), "dxfeed_public")
 
 
 def flush_tape() -> None:
-    """Écrit les barres d'order flow signé achevées (cf. gex/flowtape.py).
+    """Write completed signed order-flow bars (see gex/flowtape.py).
 
-    Même logique que `flush_prices` : le collecteur agrège en mémoire (~2,4 M
-    de prints par séance, hors de question de les persister un par un), seules
-    les barres d'une minute touchent le disque.
+    Same logic as `flush_prices`: the collector aggregates in memory; only completed 1-min bars hit disk.
     """
     bars = flowtape.TAPE.drain_bars()
     if not bars:
@@ -70,35 +64,30 @@ def flush_tape() -> None:
     for symbol, rows in by_symbol.items():
         try:
             store.append_tape(symbol, rows, rows[0]["timestamp"])
-        except Exception:  # noqa: BLE001 — une écriture ratée ne doit rien casser
-            log.exception("Échec écriture de l'order flow %s", symbol)
+        except Exception:  # noqa: BLE001 — a write failure must not break anything
+            log.exception("Failed to write order flow for %s", symbol)
 
 
 def flush_ticks() -> None:
-    """Écrit sur disque le brut tick-par-tick accumulé par la capture continue
-    (cf. gex/tickcapture). Même logique que flush_prices/flush_tape : le
-    collecteur agrège en mémoire, seul le flush touche le disque — ici vers le
-    parquet JOURNALIER de chaque contrat, chaque tick rangé selon sa SÉANCE CME,
-    définie en HEURE DE NEW YORK : 18:00 ET (ouverture) -> 16:59 ET (clôture) du
-    lendemain, soit `date = (heure ET + 6h).date()`.
+    """Write raw tick-by-tick data accumulated by the continuous capture (see gex/tickcapture).
 
-    ⚠️ Surtout PAS un découpage à l'heure de Paris : Paris ne vaut ET+6 que
-    lorsque les deux zones sont en heure d'été en même temps. Pendant les ~3
-    semaines par an où les bascules US et UE sont décalées (mi-mars, fin
-    octobre), l'écart tombe à 5 h et le fichier commence à 19:00 ET au lieu de
-    18:00 — la séance est alors coupée au mauvais endroit. L'ET est la seule
-    référence stable, parce que c'est celle du marché lui-même."""
+    Same logic as flush_prices/flush_tape: collector aggregates in memory, flush writes to disk.
+    Each tick is filed by its CME SESSION date, defined in NEW YORK TIME:
+    18:00 ET (open) -> 16:59 ET (close) of the next day, i.e. `date = (ET + 6h).date()`.
+
+    Do NOT use Paris time: it equals ET+6 only when both zones are on summer time.
+    During DST transitions (~3 weeks/year), the offset drops to 5h, cutting the session wrong.
+    ET is the only stable reference because it is the market's own timezone.
+    """
     buf = CAPTURE.drain()
     for symbol, per_contract in buf.items():
-        # 1. Regrouper par (séance, contrat) et cumuler le volume de CHAQUE
-        #    contrat — y compris celui qu'on n'écrira pas : c'est cette mesure
-        #    qui décidera du dominant de la séance suivante (cf. gex/roll).
+        # 1. Group by (session, contract) and accumulate volume for EACH
+        #    contract — including the one we won't write: this is used to pick the dominant for the next session (see gex/roll).
         by_day: dict[str, dict[str, list]] = {}
         volumes: dict[str, dict[str, float]] = {}
         for contract, rows in per_contract.items():
             for r in rows:
-                # +6 h : 18:00 ET (ouverture) bascule sur minuit, donc la date
-                # obtenue EST celle de la séance, y compris la partie du soir.
+                # +6h: 18:00 ET (open) rolls over to midnight, so the resulting date IS the session date, including the evening portion.
                 sess = (datetime.fromtimestamp(r["ts"], tz=UTC).astimezone(ET)
                         + timedelta(hours=6))
                 day = sess.strftime("%Y-%m-%d")
@@ -109,12 +98,11 @@ def flush_ticks() -> None:
         for day, per_c in by_day.items():
             try:
                 roll.record_volumes(symbol, day, volumes.get(day, {}))
-            except Exception:  # noqa: BLE001 — l'état de roll ne doit rien bloquer
-                log.exception("Capture tick : échec mémorisation des volumes %s", symbol)
-            # 2. N'écrire que le contrat dominant : la série sur disque reste
-            #    une série CONTINUE, comparable au jeu de référence. L'ordre
-            #    passé est celui du courtier ([actif, suivant]) : c'est lui qui
-            #    sert de repli tant qu'aucun volume de veille n'est connu.
+            except Exception:  # noqa: BLE001 — roll state must not block anything
+                log.exception("Tick capture: failed to record volumes for %s", symbol)
+            # 2. Only write the dominant contract: keeps the on-disk series
+            #    continuous, comparable to the reference dataset.
+            #    Broker order ([active, next]) is used as fallback when no prior-day volume is known.
             contracts = [c for c in CAPTURE.contract_order(symbol) if c in per_c]
             contracts += [c for c in per_c if c not in contracts]
             keep = roll.dominant(symbol, day, contracts)
@@ -124,5 +112,5 @@ def flush_ticks() -> None:
             rows_day = [it[1] for it in items]
             try:
                 store.append_ticks(symbol, rows_day, items[0][0])
-            except Exception:  # noqa: BLE001 — une écriture ratée ne doit rien casser
-                log.exception("Capture tick : échec écriture %s", symbol)
+            except Exception:  # noqa: BLE001 — a write failure must not break anything
+                log.exception("Tick capture: write failed for %s", symbol)
