@@ -29,6 +29,7 @@ def strike_of(symbol: str) -> float:
 
 @dataclass
 class _FlowBar:
+    minute: int = 0
     net_contracts: float = 0.0
     buy_contracts: float = 0.0
     sell_contracts: float = 0.0
@@ -61,6 +62,20 @@ class _FlowBar:
         }
 
 
+def build_index_universe(symbol: str, spot: float, access_token: str) -> list[str]:
+    """Return the streamer symbols active for an index under the current spot."""
+    if symbol not in {"SPX", "NDX", "SPY", "QQQ"}:
+        return []
+    try:
+        from . import idxopt
+        chain = idxopt.fetch_chain_instruments(symbol, access_token)
+        if chain.empty:
+            return []
+        return [str(v) for v in chain["streamer_symbol"].dropna().tolist()]
+    except Exception:
+        return []
+
+
 class FlowTape:
     def __init__(self) -> None:
         self._by_stream: dict[str, str] = {}
@@ -68,6 +83,7 @@ class FlowTape:
         self._spot: dict[str, float] = {}
         self._center: dict[str, float] = {}
         self.bars: dict[str, _FlowBar] = {}
+        self._closed: dict[str, list[_FlowBar]] = {}
         self._prints: list[dict[str, Any]] = []
 
     def status(self):
@@ -95,8 +111,15 @@ class FlowTape:
         favorite = {"BUY": 1.0, "SELL": -1.0}.get(str(side).upper())
         spread = bool(event.get("spreadLeg"))
         price = float(event.get("price", 0.0) or 0.0)
-        # Rebuild the current bar for the symbol.
-        bar = self.bars.setdefault(symbol, _FlowBar())
+        current_minute = int(float(now) // 60) * 60
+        bar = self.bars.get(symbol)
+        if bar is not None and bar.minute != current_minute:
+            self._closed.setdefault(symbol, []).append(bar)
+            self.bars[symbol] = _FlowBar(minute=current_minute)
+            bar = self.bars[symbol]
+        if bar is None:
+            bar = _FlowBar(minute=current_minute)
+            self.bars[symbol] = bar
         if spread:
             bar.spread_contracts += size
             bar.spread_prints += 1
@@ -106,11 +129,14 @@ class FlowTape:
             else:
                 bar.buy_contracts += size if favorite > 0 else 0.0
                 bar.sell_contracts += size if favorite < 0 else 0.0
-                bar.net_contracts += favorite * size
                 if option_type_of(stream) == "C":
-                    bar.net_calls += favorite * size
+                    signed = favorite * size
+                    bar.net_calls += signed
+                    bar.net_contracts = bar.net_calls + bar.net_puts
                 else:
-                    bar.net_puts += -favorite * size
+                    signed = -favorite * size
+                    bar.net_puts += signed
+                    bar.net_contracts = bar.net_calls + bar.net_puts
                 bar.net_premium += favorite * size * price * CONTRACT_MULTIPLIER
                 spot = self._spot.get(symbol, 1.0)
                 delta = self._delta.get(stream)
@@ -134,13 +160,25 @@ class FlowTape:
         self._prints = self._prints[-PRINT_BUFFER:]
 
     def drain_bars(self, flush: bool = False, now: float | None = None) -> list[tuple[str, _FlowBar]]:
-        if not self.bars:
-            return []
         done: list[tuple[str, _FlowBar]] = []
-        for symbol, bar in list(self.bars.items()):
-            done.append((symbol, bar))
-            del self.bars[symbol]
-        return done if flush else []
+        for symbol, items in list(self._closed.items()):
+            for bar in items:
+                done.append((symbol, bar))
+            del self._closed[symbol]
+        if not self.bars:
+            return done
+        if flush:
+            for symbol, bar in list(self.bars.items()):
+                done.append((symbol, bar))
+                del self.bars[symbol]
+            return done
+        if now is not None:
+            cutoff = int(float(now))
+            for symbol, bar in list(self.bars.items()):
+                if bar.minute + 60 <= cutoff:
+                    done.append((symbol, bar))
+                    del self.bars[symbol]
+        return done
 
     def recent_prints(self, symbol: str, min_size: float = 0.0, limit: int = PRINT_BUFFER, include_combos: bool = True):
         rows = []
@@ -167,6 +205,24 @@ class FlowTape:
 
     def _build_universe(self):
         self._center = {}
+        self._by_stream = {}
+        try:
+            from . import idxopt, futopt
+            from .rtquote import quote_token
+        except Exception:
+            return
+        _, _, access = quote_token()
+        for symbol in ("SPX", "NDX", "SPY", "QQQ", "ES", "NQ"):
+            if symbol in {"SPX", "NDX", "SPY", "QQQ"}:
+                spot = idxopt.reference_spot(symbol)
+            else:
+                spot = futopt._reference_spot(symbol, access)
+            if spot is None:
+                continue
+            self._center[symbol] = float(spot)
+            streams = build_index_universe(symbol, float(spot), access) if symbol in {"SPX", "NDX", "SPY", "QQQ"} else []
+            for stream in streams:
+                self._by_stream[stream] = symbol
 
 
 TAPE = FlowTape()

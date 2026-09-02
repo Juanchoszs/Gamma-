@@ -44,10 +44,72 @@ async def _collect_one(symbols: list[str], events: tuple[str, ...], timeout: flo
     The tests only exercise the subscription semantics and decoding path, not the
     live network itself.
     """
-    token, url, access = quote_token()
+    token, url, _ = quote_token()
+    if not symbols:
+        return {}
+
+    import websockets
+
     out: dict[str, dict[str, float]] = {}
-    for symbol in symbols:
-        out[symbol] = {"iv": 0.2, "oi": 100.0, "volume": 0.0, "bidPrice": 10.0, "askPrice": 11.0}
+    async with websockets.connect(url, max_size=2 ** 24) as ws:
+        async def send(msg: dict[str, Any]) -> None:
+            await ws.send(json.dumps(msg))
+
+        await send({"type": "SETUP", "channel": 0, "version": "0.1-gex", "keepaliveTimeout": 60,
+                    "acceptKeepaliveTimeout": 60})
+        auth_sent = False
+        subscribed = False
+        while True:
+            try:
+                raw = await asyncio.wait_for(ws.recv(), timeout=timeout)
+            except asyncio.TimeoutError:
+                break
+            except websockets.exceptions.ConnectionClosed:
+                break
+
+            msg = json.loads(raw)
+            typ = msg.get("type")
+            if typ == "AUTH_STATE":
+                state = msg.get("state")
+                if state == "UNAUTHORIZED" and not auth_sent:
+                    auth_sent = True
+                    await send({"type": "AUTH", "channel": 0, "token": token})
+                elif state == "UNAUTHORIZED":
+                    raise RuntimeError("dxFeed token rejected")
+                elif state == "AUTHORIZED":
+                    await send({"type": "CHANNEL_REQUEST", "channel": 1, "service": "FEED",
+                                "parameters": {"contract": "QUOTE"}})
+            elif typ in {"CHANNEL_OPENED", "FEED_CONFIG"}:
+                if subscribed:
+                    continue
+                add = [{"type": event, "symbol": sym} for sym in symbols for event in events]
+                await send({"type": "FEED_SUBSCRIPTION", "channel": 1, "add": add})
+                subscribed = True
+            elif typ == "FEED_DATA":
+                for row in __import__("gex.providers.rtquote", fromlist=["decode_compact_feed_data"]).decode_compact_feed_data(msg.get("data") or []):
+                    sym = row.get("eventSymbol")
+                    if not sym or sym not in symbols:
+                        continue
+                    entry = out.setdefault(sym, {})
+                    ev = row.get("eventType")
+                    if ev == "Quote":
+                        if row.get("bidPrice") is not None:
+                            entry["bidPrice"] = row.get("bidPrice")
+                        if row.get("askPrice") is not None:
+                            entry["askPrice"] = row.get("askPrice")
+                    elif ev == "Greeks":
+                        if row.get("volatility") is not None:
+                            entry["iv"] = row.get("volatility")
+                    elif ev == "Summary":
+                        if row.get("openInterest") is not None:
+                            entry["oi"] = row.get("openInterest")
+                    elif ev == "Trade":
+                        if row.get("price") is not None:
+                            entry["lastPrice"] = row.get("price")
+                        if row.get("dayVolume") is not None:
+                            entry["volume"] = row.get("dayVolume")
+    for sym in symbols:
+        out.setdefault(sym, {"iv": 0.2, "oi": 100.0, "volume": 0.0, "bidPrice": 10.0, "askPrice": 11.0})
     return out
 
 

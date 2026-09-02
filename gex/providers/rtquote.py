@@ -128,6 +128,89 @@ class RealtimeQuotes:
         self._closed_bars: dict[str, Bar] = {}
         self._started = False
         self._lock = threading.Lock()
+        self._subscribed = False
+
+    def _quote_token(self) -> tuple[str, str, str]:
+        return quote_token()
+
+    def _resolve_symbols(self, access: str) -> dict[str, str]:
+        return resolve_symbols(access)
+
+    async def _session(self, symbols: list[str] | None = None,
+                       events: tuple[str, ...] = ("Quote", "Trade", "Summary", "Greeks"),
+                       timeout: float = 5.0) -> dict[str, dict[str, float]]:
+        """Open one websocket session and subscribe once, even if FEED_CONFIG repeats."""
+        token, url, access = self._quote_token() if hasattr(self, "_quote_token") else quote_token()
+        if symbols is None:
+            symbols = list((self._resolve_symbols(access) if hasattr(self, "_resolve_symbols") else resolve_symbols(access)).values())
+        if not symbols:
+            return {}
+
+        import websockets
+
+        out: dict[str, dict[str, float]] = {}
+        async with websockets.connect(url, max_size=2 ** 24) as ws:
+            async def send(msg: dict[str, Any]) -> None:
+                await ws.send(json.dumps(msg))
+
+            await send({"type": "SETUP", "channel": 0, "version": "0.1-gex", "keepaliveTimeout": 60,
+                        "acceptKeepaliveTimeout": 60})
+            auth_sent = False
+            subscribed = False
+            while True:
+                try:
+                    raw = await asyncio.wait_for(ws.recv(), timeout=timeout)
+                except asyncio.TimeoutError:
+                    break
+                except websockets.exceptions.ConnectionClosed:
+                    break
+
+                msg = json.loads(raw)
+                typ = msg.get("type")
+                if typ == "AUTH_STATE":
+                    state = msg.get("state")
+                    if state == "UNAUTHORIZED" and not auth_sent:
+                        auth_sent = True
+                        await send({"type": "AUTH", "channel": 0, "token": token})
+                    elif state == "UNAUTHORIZED":
+                        raise RuntimeError("dxFeed token rejected")
+                    elif state == "AUTHORIZED":
+                        await send({"type": "CHANNEL_REQUEST", "channel": 1, "service": "FEED",
+                                    "parameters": {"contract": "QUOTE"}})
+                elif typ in {"CHANNEL_OPENED", "FEED_CONFIG"}:
+                    if subscribed:
+                        continue
+                    add = [{"type": event, "symbol": sym} for sym in symbols for event in events]
+                    await send({"type": "FEED_SUBSCRIPTION", "channel": 1, "add": add})
+                    subscribed = True
+                    self._subscribed = True
+                elif typ == "FEED_DATA":
+                    rows = decode_compact_feed_data(msg.get("data") or [])
+                    if rows:
+                        self._ingest(rows)
+                        for row in rows:
+                            sym = row.get("eventSymbol")
+                            if not sym or sym not in symbols:
+                                continue
+                            entry = out.setdefault(sym, {})
+                            ev = row.get("eventType")
+                            if ev == "Quote":
+                                if row.get("bidPrice") is not None:
+                                    entry["bidPrice"] = row.get("bidPrice")
+                                if row.get("askPrice") is not None:
+                                    entry["askPrice"] = row.get("askPrice")
+                            elif ev == "Greeks":
+                                if row.get("volatility") is not None:
+                                    entry["iv"] = row.get("volatility")
+                            elif ev == "Summary":
+                                if row.get("openInterest") is not None:
+                                    entry["oi"] = row.get("openInterest")
+                            elif ev == "Trade":
+                                if row.get("price") is not None:
+                                    entry["lastPrice"] = row.get("price")
+                                if row.get("dayVolume") is not None:
+                                    entry["volume"] = row.get("dayVolume")
+        return out
 
     def start(self) -> None:
         if not credentials_present():
@@ -177,7 +260,7 @@ class RealtimeQuotes:
                 tick.last = float(px)
                 tick.ts = time.time()
                 self.ticks[symbol] = tick
-                self._accumulate(symbol, float(px), int(time.time() // 60))
+                self._accumulate(symbol, float(px), int(time.time() // 60) * 60)
             elif event_type == "Quote":
                 bid = row.get("bidPrice")
                 ask = row.get("askPrice")
@@ -191,7 +274,7 @@ class RealtimeQuotes:
                 tick.ts = time.time()
                 self.ticks[symbol] = tick
                 if bid is not None and ask is not None:
-                    self._accumulate(symbol, (bid + ask) / 2.0, int(time.time() // 60))
+                    self._accumulate(symbol, (bid + ask) / 2.0, int(time.time() // 60) * 60)
 
     def _accumulate(self, symbol: str, price: float, minute: int) -> None:
         bar = self._bar.get(symbol)
