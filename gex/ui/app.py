@@ -40,24 +40,35 @@ def _app_fn(name: str):
 
 
 C = {
-    "surface": "#1a1a19",
-    "page": "#0d0d0d",
-    "ink": "#ffffff",
-    "ink2": "#c3c2b7",
-    "muted": "#898781",
-    "grid": "#2c2c2a",
-    "axis": "#383835",
-    "pos": "#3987e5",   # Positive GEX / buy flow
-    "neg": "#e66767",   # Negative GEX / sell flow
-    "spot": "#ffffff",
-    "zg": "#c98500",    # Gamma Flip
-    "lvl": "#9085e9",   # 0DTE GEX levels
-    "hvl": "#199e70",   # HVL (Volume-weighted flip)
-    "cw": "#3987e5",    # Call Wall (resistance)
-    "ps": "#e66767",    # Put Support (support)
-    "d1": "#898781",    # 1D bounds (expected move)
-    "ok": "#199e70",    # Realtime data (green)
-    "cat": ["#3987e5", "#d95926", "#199e70", "#c98500"],  # slots 1-4
+    "page": "#04090d",
+    "app": "#070d13",
+    "surface": "#0c141b",
+    "surface_2": "#142733",
+    "surface_strong": "#162d3d",
+    "panel": "#0d151c",
+    "panel_alt": "#091118",
+    "ink": "#edf7ff",
+    "ink2": "#d4e1ef",
+    "muted": "#8da5bb",
+    "line": "rgba(169,194,214,0.22)",
+    "grid": "rgba(149, 176, 205, 0.20)",
+    "axis": "rgba(212, 228, 240, 0.36)",
+    "focus": "#89dcff",
+    "accent": "#9fe5ff",
+    "pos": "#48d2ff",   # Positive GEX / buy flow
+    "neg": "#ff5d7d",   # Negative GEX / sell flow
+    "spot": "#f2f7ff",
+    "zg": "#ffc76d",    # Gamma Flip
+    "lvl": "#7dd7ff",   # 0DTE GEX levels
+    "hvl": "#57e1b5",   # HVL (Volume-weighted flip)
+    "cw": "#7dd7ff",    # Call Wall (resistance)
+    "ps": "#ff808d",    # Put Support (support)
+    "d1": "#b7c8db",    # 1D bounds (expected move)
+    "ok": "#57e1b5",
+    "warning": "#ffc76d",
+    "success": "#57e1b5",
+    "neutral": "#8da5bb",
+    "cat": ["#48d2ff", "#ff5d7d", "#57e1b5", "#ffc76d"],
 }
 
 FONT = 'system-ui, -apple-system, "Segoe UI", sans-serif'
@@ -68,12 +79,20 @@ LOCAL_TZ = datetime.now().astimezone().tzinfo
 BUCKET_KEYS = {"0DTE": "bucket_0DTE", "Semaine": "bucket_week",
                "Mois": "bucket_month", "Tout": "bucket_all"}
 
-TAB_STYLE = {"backgroundColor": "#0d0d0d", "color": "#898781",
-             "border": "1px solid #2c2c2a", "padding": "8px 14px", "fontSize": "13px"}
-TAB_SELECTED = {"backgroundColor": "#1a1a19", "color": "#ffffff",
-                "border": "1px solid #2c2c2a", "borderTop": "2px solid #3987e5",
-                "padding": "8px 14px", "fontSize": "13px", "fontWeight": "600"}
-HINT_STYLE = {"color": "#898781", "fontSize": "11px", "marginBottom": "8px"}
+TAB_STYLE = {
+    "backgroundColor": C["surface"], "color": C["muted"],
+    "border": "1px solid " + C["line"], "padding": "9px 15px",
+    "fontSize": "12.5px", "fontWeight": "500",
+    "borderRadius": "8px 8px 0 0", "boxShadow": "inset 0 1px 0 rgba(255,255,255,0.02)"
+}
+TAB_SELECTED = {
+    "backgroundColor": C["panel"], "color": C["ink"],
+    "border": "1px solid " + C["line"], "borderBottom": "2px solid " + C["focus"],
+    "padding": "9px 15px", "fontSize": "12.5px", "fontWeight": "600",
+    "borderRadius": "8px 8px 0 0",
+    "boxShadow": "inset 0 1px 0 rgba(255,255,255,0.06), 0 -6px 18px rgba(95,168,255,0.08)"
+}
+HINT_STYLE = {"color": C["muted"], "fontSize": "11px", "marginBottom": "8px"}
 TABS = ("main", "profile", "greeks2", "heat", "pos", "tape")
 
 
@@ -128,18 +147,90 @@ def base_layout(title: str, height: int = 420) -> dict:
         title=dict(text=title, font=dict(size=13, color=C["ink"], family=FONT),
                    x=0.012, y=0.97, xanchor="left"),
         template=None,
-        paper_bgcolor=C["surface"],
-        plot_bgcolor=C["surface"],
+        paper_bgcolor=C["app"],
+        plot_bgcolor=C["app"],
         font=dict(family=FONT, size=11, color=C["ink2"]),
         margin=dict(l=58, r=18, t=42, b=38),
         height=height,
-        xaxis=dict(gridcolor=C["grid"], zerolinecolor=C["axis"], linecolor=C["axis"], tickfont=dict(color=C["muted"])),
-        yaxis=dict(gridcolor=C["grid"], zerolinecolor=C["axis"], linecolor=C["axis"], tickfont=dict(color=C["muted"])),
-        hoverlabel=dict(bgcolor=C["page"], font=dict(family=FONT, color=C["ink"])),
+        xaxis=dict(gridcolor=C["grid"], zerolinecolor="rgba(255,255,255,0.34)", linecolor=C["axis"], tickfont=dict(color=C["muted"]), showline=True, ticklen=4, mirror=False),
+        yaxis=dict(gridcolor=C["grid"], zerolinecolor="rgba(255,255,255,0.34)", linecolor=C["axis"], tickfont=dict(color=C["muted"]), showline=True, ticklen=4, mirror=False),
+        hoverlabel=dict(bgcolor=C["surface_2"], bordercolor=C["line"], font=dict(family=FONT, color=C["ink"], size=11)),
         showlegend=False,
-        # Prevent accidental zooms; scroll and toolbar zoom still work
         dragmode="pan",
+        hovermode="x unified",
     )
+
+
+def _spot_band(fig: go.Figure, lo: float | None, hi: float | None,
+              color: str = "rgba(137, 220, 255, 0.05)") -> None:
+    """Adds a subtle focal band around the current spot to anchor the chart."""
+    if lo is None or hi is None:
+        return
+    fig.add_vrect(x0=lo, x1=hi, fillcolor=color, line_width=0, layer="below")
+
+
+def apply_chart_theme(fig: go.Figure) -> go.Figure:
+    """Tune the core dataviz styling to feel like a focused trading desk, not generic Plotly defaults."""
+    fig.update_layout(
+        paper_bgcolor=C["app"],
+        plot_bgcolor=C["app"],
+        hoverlabel=dict(bgcolor=C["surface_2"], bordercolor=C["accent"],
+                       borderwidth=1, font=dict(color=C["ink"], family=FONT, size=11)),
+        legend=dict(bgcolor="rgba(8, 12, 18, 0.72)", bordercolor=C["line"], borderwidth=1,
+                   font=dict(color=C["ink2"], size=11)),
+        font=dict(color=C["ink2"], family=FONT, size=11),
+        bargap=0.12,
+        bargroupgap=0.04,
+        margin=dict(l=60, r=18, t=42, b=42),
+        separators=".,",
+    )
+    fig.update_xaxes(
+        gridcolor=C["grid"],
+        zerolinecolor="rgba(255,255,255,0.34)",
+        linecolor=C["axis"],
+        tickfont=dict(color=C["muted"]),
+        showline=True,
+        ticks="outside",
+        ticklen=4,
+        titlefont=dict(color=C["muted"]),
+        showgrid=True,
+        zerolinewidth=1,
+        gridwidth=1,
+    )
+    fig.update_yaxes(
+        gridcolor=C["grid"],
+        zerolinecolor="rgba(255,255,255,0.34)",
+        linecolor=C["axis"],
+        tickfont=dict(color=C["muted"]),
+        showline=True,
+        ticks="outside",
+        ticklen=4,
+        titlefont=dict(color=C["muted"]),
+        showgrid=True,
+        zerolinewidth=1,
+        gridwidth=1,
+    )
+    fig.update_traces(
+        selector=dict(type="bar"),
+        marker=dict(line=dict(width=1.4, color="rgba(9, 14, 19, 0.72)")),
+        opacity=0.99,
+    )
+    fig.update_traces(
+        selector=dict(type="scatter"),
+        line=dict(width=2.8),
+        marker=dict(size=5, line=dict(width=0.7, color="rgba(10, 15, 20, 0.82)")),
+    )
+    fig.update_traces(
+        selector=dict(type="candlestick"),
+        increasing_line=dict(color=C["pos"], width=2.5),
+        decreasing_line=dict(color=C["neg"], width=2.5),
+        increasing_fillcolor=C["pos"],
+        decreasing_fillcolor=C["neg"],
+        whiskerwidth=0.75,
+        opacity=0.96,
+    )
+    fig.update_annotations(font=dict(color=C["ink2"], family=FONT, size=10))
+    return fig
 
 
 GRAPH_CONFIG = {
@@ -185,13 +276,46 @@ def with_legend(lay: dict) -> dict:
     lay["showlegend"] = True
     lay["margin"]["t"] = 62
     lay["legend"] = dict(orientation="h", y=1.13, x=1, xanchor="right",
-                         font=dict(color=C["ink2"], size=11))
+                         font=dict(color=C["ink2"], size=11),
+                         bgcolor="rgba(17,19,21,0.62)",
+                         bordercolor=C["line"], borderwidth=1)
     return lay
+
+
+def apply_chart_theme(fig: go.Figure) -> go.Figure:
+    """Graph theme applied consistently across Plotly charts."""
+    fig.update_layout(
+        paper_bgcolor=C["app"],
+        plot_bgcolor=C["app"],
+        font=dict(family=FONT, color=C["ink2"], size=11),
+        hoverlabel=dict(bgcolor=C["surface_2"], bordercolor=C["line"],
+                       font=dict(family=FONT, color=C["ink"], size=11)),
+        hovermode="x unified",
+        dragmode="pan",
+        legend=dict(bgcolor="rgba(17,19,21,0.62)", bordercolor=C["line"],
+                    borderwidth=1, font=dict(color=C["ink2"], size=11),
+                    orientation="h", y=1.12, x=1, xanchor="right"),
+        xaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.06)",
+                   zerolinecolor=C["axis"], linecolor=C["axis"],
+                   tickfont=dict(color=C["muted"]), showline=True,
+                   ticklen=4, mirror=False),
+        yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.06)",
+                   zerolinecolor=C["axis"], linecolor=C["axis"],
+                   tickfont=dict(color=C["muted"]), showline=True,
+                   ticklen=4, mirror=False),
+    )
+    fig.update_traces(
+        selector=dict(type="scatter"),
+        line=dict(width=2.2),
+        marker=dict(size=5)
+    )
+    return fig
 
 
 def empty_fig(msg: str, title: str = "") -> go.Figure:
     fig = go.Figure()
     fig.update_layout(**base_layout(title))
+    fig = apply_chart_theme(fig)
     fig.add_annotation(text=msg, showarrow=False, font=dict(color=C["muted"], size=13))
     return fig
 
@@ -312,6 +436,7 @@ def exposure_fig(df: pd.DataFrame, spot: float, zg: float | None, col: str, titl
         )
     )
     fig.update_layout(**base_layout(title, height=560))
+    apply_chart_theme(fig)
     fig.update_xaxes(title_text=t(lang, "axis_bn_per_move"), title_font=dict(color=C["muted"]))
     items = [dict(y=spot, label="Spot", color=C["spot"], dash="dot", side="right")]
     if level_set == "walls":
@@ -510,6 +635,7 @@ def heatmap_fig(symbol: str, lang: str, day: str | None = None,
                          title=dict(text=t(lang, "heat_axis_bn"),
                                     font=dict(color=C["muted"])))
     fig.update_layout(**lay)
+    apply_chart_theme(fig)
     return fig
 
 
@@ -606,6 +732,7 @@ def gamma_flow_fig(symbol: str, lang: str, day: str | None = None,
     lay["yaxis"]["title"] = dict(text=t(lang, "axis_gflow_bn"),
                                  font=dict(color=C["muted"]))
     fig.update_layout(**lay)
+    apply_chart_theme(fig)
     fig.add_hline(y=0, line_color=C["axis"], line_width=1)
     return fig
 
@@ -723,8 +850,6 @@ def tape_fig(symbol: str, lang: str, day: str | None = None,
     series = series if series is not None else ["net", "calls", "puts"]
     tape = tape.sort_values("timestamp")
     ts = to_local(tape["timestamp"])
-    # Delta-weighted curve
-    # Contract count
     if "net_delta" in tape.columns:
         net = np.cumsum(tape["net_delta"].fillna(0.0).to_numpy()) / 1e6
         unit, axis = t(lang, "unit_musd"), t(lang, "axis_tape_delta")
@@ -736,11 +861,17 @@ def tape_fig(symbol: str, lang: str, day: str | None = None,
 
     fig = go.Figure()
     if "net" in series:
-        fig.add_scatter(x=ts, y=net, mode="lines", name=t(lang, "legend_tape_net"),
-                        line=dict(color=C["ink"], width=2.2),
-                        hovertemplate=(f"%{{x|%H:%M}}<br>{t(lang, 'legend_tape_net')}:"
-                                       f" %{{y:+,.1f}} {unit}<extra></extra>"))
-    # Calls/Puts in contracts on own axis
+        fig.add_scatter(
+            x=ts,
+            y=net,
+            mode="lines",
+            name=t(lang, "legend_tape_net"),
+            line=dict(color=C["accent"], width=3.2, shape="spline"),
+            fill="tozeroy",
+            fillcolor="rgba(137, 220, 255, 0.12)",
+            hovertemplate=(f"%{{x|%H:%M}}<br>{t(lang, 'legend_tape_net')}:"
+                          f" %{{y:+,.1f}} {unit}<extra></extra>"),
+        )
     for key, y, name, color in (
         ("calls", calls, t(lang, "legend_tape_calls"), C["pos"]),
         ("puts", puts, t(lang, "legend_tape_puts"), C["neg"]),
@@ -748,18 +879,18 @@ def tape_fig(symbol: str, lang: str, day: str | None = None,
         if key not in series:
             continue
         fig.add_scatter(x=ts, y=y, mode="lines", name=name, yaxis="y2",
-                        line=dict(color=color, width=1.3, dash="dot"),
-                        hovertemplate=(f"%{{x|%H:%M}}<br>{name}: %{{y:+,.0f}}"
+                       line=dict(color=color, width=1.9, dash="dot", shape="spline"),
+                       hovertemplate=(f"%{{x|%H:%M}}<br>{name}: %{{y:+,.0f}}"
                                        f" {t(lang, 'unit_contracts')}<extra></extra>"))
     lay = with_legend(base_layout(title, height=340))
     lay["yaxis"]["title"] = dict(text=axis, font=dict(color=C["muted"]))
-    # Draw over curves
     lay["margin"]["r"] = 64
     lay["yaxis2"] = dict(overlaying="y", side="right", showgrid=False,
                          zeroline=False, tickfont=dict(color=C["muted"]),
                          title=dict(text=t(lang, "axis_tape"),
                                     font=dict(color=C["muted"]), standoff=8))
     fig.update_layout(**lay)
+    apply_chart_theme(fig)
     fig.add_hline(y=0, line_color=C["axis"], line_width=1)
     return fig
 
@@ -776,12 +907,26 @@ def flow_fig(symbol: str, lang: str, day: str | None = None) -> go.Figure:
     vals = flows[col].fillna(0.0).to_numpy() / 1e6
     cum = np.cumsum(vals)
     fig = go.Figure()
-    fig.add_bar(x=ts, y=vals, name=t(lang, "legend_flow"),
-                marker=dict(color=np.where(vals >= 0, C["pos"], C["neg"]), line=dict(width=0)),
-                hovertemplate=f"%{{x|%H:%M}}<br>{t(lang, 'hover_flow')}: %{{y:.1f}} $M<extra></extra>")
-    fig.add_scatter(x=ts, y=cum, mode="lines", name=t(lang, "legend_cum"), yaxis="y2",
-                    line=dict(color=C["ink2"], width=2),
-                    hovertemplate=f"%{{x|%H:%M}}<br>{t(lang, 'hover_cum')}: %{{y:.1f}} $M<extra></extra>")
+    fig.add_bar(
+        x=ts,
+        y=vals,
+        name=t(lang, "legend_flow"),
+        marker=dict(color=np.where(vals >= 0, C["pos"], C["neg"]),
+                    line=dict(width=0.8, color="rgba(8, 12, 18, 0.7)")),
+        opacity=0.96,
+        hovertemplate=f"%{{x|%H:%M}}<br>{t(lang, 'hover_flow')}: %{{y:.1f}} $M<extra></extra>",
+    )
+    fig.add_scatter(
+        x=ts,
+        y=cum,
+        mode="lines",
+        name=t(lang, "legend_cum"),
+        yaxis="y2",
+        line=dict(color=C["accent"], width=3.2, shape="spline"),
+        fill="tozeroy",
+        fillcolor="rgba(137, 220, 255, 0.08)",
+        hovertemplate=f"%{{x|%H:%M}}<br>{t(lang, 'hover_cum')}: %{{y:.1f}} $M<extra></extra>",
+    )
     lay = base_layout(title, height=300)
     lay["yaxis"] = dict(domain=[0.55, 1.0], gridcolor=C["grid"], zerolinecolor=C["axis"],
                         title=dict(text=t(lang, "axis_m_per_min"), font=dict(color=C["muted"])),
@@ -791,6 +936,8 @@ def flow_fig(symbol: str, lang: str, day: str | None = None) -> go.Figure:
                          tickfont=dict(color=C["muted"]))
     lay["height"] = 380
     fig.update_layout(**lay)
+    apply_chart_theme(fig)
+    fig.add_hline(y=0, line_color=C["axis"], line_width=1)
     return fig
 
 
@@ -800,13 +947,22 @@ def history_fig(symbol: str, lang: str) -> go.Figure:
     if hist.empty or len(hist) < 2:
         return empty_fig(t(lang, "not_enough_history"), title)
     ts = to_local(hist["timestamp"])
+    vals = hist["net_gex"] / 1e9
     fig = go.Figure()
-    fig.add_scatter(x=ts, y=hist["net_gex"] / 1e9, mode="lines", name="GEX",
-                    line=dict(color=C["cat"][0], width=2),
-                    hovertemplate="%{x|%d/%m %H:%M}<br>GEX: %{y:.1f} $Bn<extra></extra>")
+    fig.add_scatter(
+        x=ts,
+        y=vals,
+        mode="lines",
+        name="GEX",
+        line=dict(color=C["accent"], width=3.0, shape="spline"),
+        fill="tozeroy",
+        fillcolor="rgba(137, 220, 255, 0.12)",
+        hovertemplate="%{x|%d/%m %H:%M}<br>GEX: %{y:.1f} $Bn<extra></extra>",
+    )
     lay = base_layout(title, height=300)
     lay["margin"]["t"] = 62
     fig.update_layout(**lay)
+    apply_chart_theme(fig)
     fig.update_xaxes(**time_range_selector(), range=default_window(ts))
     return fig
 
@@ -817,13 +973,27 @@ def spot_zg_fig(symbol: str, lang: str) -> go.Figure:
     if hist.empty or len(hist) < 2:
         return empty_fig(t(lang, "not_enough_history"), title)
     ts = to_local(hist["timestamp"])
+    spot = hist["spot"].to_numpy()
+    zg = hist["zero_gamma"].to_numpy()
     fig = go.Figure()
-    fig.add_scatter(x=ts, y=hist["spot"], mode="lines", name=t(lang, "legend_spot"),
-                    line=dict(color=C["cat"][0], width=2),
-                    hovertemplate="%{x|%d/%m %H:%M}<br>Spot: %{y:.0f}<extra></extra>")
-    fig.add_scatter(x=ts, y=hist["zero_gamma"], mode="lines", name=t(lang, "legend_zg"),
-                    line=dict(color=C["zg"], width=2, dash="dash"),
-                    hovertemplate="%{x|%d/%m %H:%M}<br>Gamma Flip: %{y:.0f}<extra></extra>")
+    fig.add_scatter(
+        x=ts,
+        y=spot,
+        mode="lines",
+        name=t(lang, "legend_spot"),
+        line=dict(color=C["ink"], width=3.0, shape="spline"),
+        fill="tozeroy",
+        fillcolor="rgba(237, 247, 255, 0.06)",
+        hovertemplate="%{x|%d/%m %H:%M}<br>Spot: %{y:.0f}<extra></extra>",
+    )
+    fig.add_scatter(
+        x=ts,
+        y=zg,
+        mode="lines",
+        name=t(lang, "legend_zg"),
+        line=dict(color=C["zg"], width=2.6, dash="dash", shape="spline"),
+        hovertemplate="%{x|%d/%m %H:%M}<br>Gamma Flip: %{y:.0f}<extra></extra>",
+    )
     lay = base_layout(title, height=300)
     lay = with_legend(lay)
     fig.update_layout(**lay)
@@ -835,7 +1005,6 @@ def smile_fig(df: pd.DataFrame, spot: float, lang: str) -> go.Figure:
     title = guided(t(lang, "smile_title"), "smile")
     d = df[(df["iv"] > 0.01) & (df["open_interest"] > 0)
            & df["strike"].between(spot * 0.85, spot * 1.15)]
-    # Standard OTM IV smile
     otm = d[((d["type"] == "P") & (d["strike"] <= spot)) | ((d["type"] == "C") & (d["strike"] > spot))]
     expiries = sorted(otm["expiry"].unique())[:4]
     if not expiries:
@@ -844,9 +1013,16 @@ def smile_fig(df: pd.DataFrame, spot: float, lang: str) -> go.Figure:
     for i, exp in enumerate(expiries):
         e = otm[otm["expiry"] == exp].sort_values("strike")
         smoothed = e.groupby("strike")["iv"].mean()
-        fig.add_scatter(x=smoothed.index, y=smoothed * 100, mode="lines",
-                        name=str(exp), line=dict(color=C["cat"][i % 4], width=2),
-                        hovertemplate=f"{exp}<br>{t(lang, 'hover_strike')} %{{x}}<br>IV: %{{y:.1f}}%<extra></extra>")
+        fig.add_scatter(
+           x=smoothed.index,
+           y=smoothed * 100,
+           mode="lines",
+           name=str(exp),
+           line=dict(color=C["cat"][i % 4], width=3.0, shape="spline"),
+           fill="tozeroy" if i == 0 else None,
+           fillcolor="rgba(137, 220, 255, 0.04)",
+           hovertemplate=f"{exp}<br>{t(lang, 'hover_strike')} %{{x}}<br>IV: %{{y:.1f}}%<extra></extra>",
+        )
     lay = base_layout(title, height=300)
     lay = with_legend(lay)
     fig.update_layout(**lay)
@@ -867,19 +1043,35 @@ def profile_fig(df: pd.DataFrame, spot: float, zg: float | None, lang: str,
     x = xf(grid)
     y = prof / 1e9
     fig = go.Figure()
-    # Two traces for polarity coloring
-    fig.add_scatter(x=x, y=np.where(y >= 0, y, np.nan), mode="lines",
-                    line=dict(color=C["pos"], width=2), name="GEX +",
-                    hovertemplate="%{x:.0f}<br>%{y:.1f} $Bn<extra></extra>")
-    fig.add_scatter(x=x, y=np.where(y < 0, y, np.nan), mode="lines",
-                    line=dict(color=C["neg"], width=2), name="GEX −",
-                    hovertemplate="%{x:.0f}<br>%{y:.1f} $Bn<extra></extra>")
+    pos = np.maximum(y, 0.0)
+    neg = np.minimum(y, 0.0)
+    fig.add_scatter(
+        x=x,
+        y=pos,
+        mode="lines",
+        line=dict(color=C["pos"], width=3.2, shape="spline"),
+        fill="tozeroy",
+        fillcolor="rgba(72, 210, 255, 0.12)",
+        name="GEX +",
+        hovertemplate="%{x:.0f}<br>%{y:.1f} $Bn<extra></extra>",
+    )
+    fig.add_scatter(
+        x=x,
+        y=neg,
+        mode="lines",
+        line=dict(color=C["neg"], width=3.2, shape="spline"),
+        fill="tozeroy",
+        fillcolor="rgba(255, 93, 125, 0.12)",
+        name="GEX −",
+        hovertemplate="%{x:.0f}<br>%{y:.1f} $Bn<extra></extra>",
+    )
     fig.update_layout(**base_layout(title, height=420))
     fig.update_xaxes(title_text=t(lang, "profile_axis"), title_font=dict(color=C["muted"]))
     fig.update_yaxes(title_text="$Bn / 1%", title_font=dict(color=C["muted"]))
     fig.add_hline(y=0, line_color=C["axis"], line_width=1)
-    # Vertical lines labels
-    # Horizontal labels overlap easily
+    lo = xf(spot * (1 - window))
+    hi = xf(spot * (1 + window))
+    _spot_band(fig, lo, hi, color="rgba(137, 220, 255, 0.04)")
     fig.add_vline(x=xf(spot), line_color=C["spot"], line_dash="dot", line_width=1,
                   annotation_text=f"Spot {xf(spot):.0f}",
                   annotation_font=dict(color=C["ink"], size=10),
@@ -910,7 +1102,7 @@ def profile_by_expiry_fig(df: pd.DataFrame, spot: float, lang: str,
         grid, prof = res
         fig.add_scatter(x=xf(grid), y=prof / 1e9, mode="lines",
                         name=t(lang, BUCKET_KEYS[bucket]),
-                        line=dict(color=C["cat"][i % 4], width=2),
+                        line=dict(color=C["cat"][i % 4], width=2.5),
                         hovertemplate="%{x:.0f}<br>%{y:.1f} $Bn<extra></extra>")
         drawn += 1
     if drawn == 0:
@@ -937,15 +1129,18 @@ def second_order_fig(df: pd.DataFrame, spot: float, col: str, title: str,
     vals = agg.to_numpy()
     fig = go.Figure(go.Bar(
         y=strikes, x=vals, orientation="h",
-        width=_bar_width(agg.index.to_numpy()),
-        marker=dict(color=np.where(vals >= 0, C["pos"], C["neg"]), line=dict(width=0)),
+        width=_bar_width(agg.index.to_numpy()) * 0.92,
+        marker=dict(color=np.where(vals >= 0, C["pos"], C["neg"]), line=dict(width=0.8, color="rgba(9, 14, 19, 0.72)")),
+        opacity=0.98,
         hovertemplate="%{y}<br>%{x:.1f} $M<extra></extra>",
     ))
     fig.update_layout(**base_layout(title, height=460))
+    _spot_band(fig, xf(lo), xf(hi), color="rgba(137, 220, 255, 0.04)")
     fig.add_hline(y=xf(spot), line_color=C["spot"], line_dash="dot", line_width=1,
                   annotation_text=f"Spot {xf(spot):.0f}", annotation_font_color=C["ink"],
                   annotation_position="top right")
     fig.update_xaxes(title_text="$M", title_font=dict(color=C["muted"]))
+    fig.update_traces(marker_line_width=0.8, opacity=0.96)
     return fig
 
 
