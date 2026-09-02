@@ -20,7 +20,7 @@ from dash.exceptions import PreventUpdate
 from .. import digest, metrics, store
 from ..api import register_api
 from ..providers.tt_web import connection_status, register_oauth
-from ..config import SETTINGS, UNDERLYINGS, targets
+from ..config import CONTRACT_MULTIPLIER, SETTINGS, UNDERLYINGS, targets
 from .i18n import LANGS, regime_text, t, wall_labels
 from ..metrics import ET, EXPIRY_BUCKETS
 from ..providers import idxopt
@@ -384,7 +384,7 @@ def _draw_levels(fig, items: list[dict], lo: float, hi: float) -> None:
     sont répartis entre les deux graphiques et entre les deux côtés, ce qui
     suffit à les espacer dans la grande majorité des cas.
 
-    items : dicts {y, label, color, dash, side} ; side ∈ {"left", "right"}.
+    items : dicts {y, label, color, dash, side, level_type} ; side ∈ {"left", "right"}.
     """
     for it in items:
         if it["y"] is None or not (lo <= it["y"] <= hi):
@@ -435,40 +435,55 @@ def exposure_fig(df: pd.DataFrame, spot: float, zg: float | None, col: str, titl
             ),
         )
     )
-    fig.update_layout(**base_layout(title, height=560))
-    apply_chart_theme(fig)
+    # Use new unified theme system
+    from .chart_theme import market_chart_layout, apply_market_theme
+    from .chart_utils import add_reference_lines
+
+    fig.update_layout(**market_chart_layout(title, height=560))
+    fig = apply_market_theme(fig)
     fig.update_xaxes(title_text=t(lang, "axis_bn_per_move"), title_font=dict(color=C["muted"]))
-    items = [dict(y=spot, label="Spot", color=C["spot"], dash="dot", side="right")]
+
+    # Build reference levels with new system
+    items = [dict(y=spot, label="Spot", color=C["spot"], dash="dot", side="right",
+                  level_type="spot")]
     if level_set == "walls":
         for key, color, label in (("call_wall", C["cw"], "Call Wall"),
                                   ("put_support", C["ps"], "Put Support")):
             v = (keys or {}).get(key)
             if v is not None:
                 items.append(dict(y=xf(v), label=label, color=color,
-                                  dash="solid", width=1.5, side="right"))
+                                  dash="solid", width=1.5, side="right", level_type="wall"))
         if levels is not None and not levels.empty:
             labels = wall_labels(levels)
             for lv in levels.itertuples():
                 # Regime levels moved to DEX graph
                 items.append(dict(y=xf(lv.strike), label=labels[lv.strike],
-                                  color=C["lvl"], dash="dashdot", side="left"))
+                                  color=C["lvl"], dash="dashdot", side="left",
+                                  level_type="secondary"))
     else:
-        items += [dict(y=zg, label="Gamma Flip", color=C["zg"], side="left"),
-                  dict(y=hvl, label="HVL", color=C["hvl"], side="left")]
+        items += [dict(y=zg, label="Gamma Flip", color=C["zg"], side="left",
+                      level_type="zg"),
+                  dict(y=hvl, label="HVL", color=C["hvl"], side="left",
+                      level_type="hvl")]
         for key, label in (("d1_max", "1D Max"), ("d1_min", "1D Min")):
             v = (keys or {}).get(key)
             if v is not None:
                 items.append(dict(y=xf(v), label=label, color=C["d1"],
-                                  dash="dot", width=1.5, side="right"))
-    _draw_levels(fig, items, lo, hi)
+                                  dash="dot", width=1.5, side="right",
+                                  level_type="secondary"))
+
+    # Use new reference line system
+    add_reference_lines(fig, items, (lo, hi))
     return fig
 
 
 def available_flow_days(symbol: str) -> list[str]:
-    root = SETTINGS.data_dir / "flows" / symbol
-    if not root.exists():
-        return []
-    return sorted(p.stem for p in root.glob("*.parquet"))
+    days: set[str] = set()
+    for kind in ("flows", "tape"):
+        root = SETTINGS.data_dir / kind / symbol
+        if root.exists():
+            days.update(p.stem for p in root.glob("*.parquet"))
+    return sorted(days)
 
 
 def _apply_user_zoom(lay: dict, relayout: dict | None) -> None:
@@ -608,7 +623,11 @@ def heatmap_fig(symbol: str, lang: str, day: str | None = None,
                               color=C["lvl"], dash="dot"))
     _draw_levels(fig, items, xf(lo), xf(hi))
 
-    lay = with_legend(base_layout(title, height=560))
+    # Use new unified theme system
+    from .chart_theme import market_chart_layout, apply_market_theme
+    from .chart_utils import with_legend, add_reference_lines, apply_user_zoom
+
+    lay = with_legend(market_chart_layout(title, height=560))
     lay["barmode"] = "overlay"
     lay["yaxis"]["title"] = dict(text=t(lang, "heat_axis_strike"),
                                  font=dict(color=C["muted"]))
@@ -635,7 +654,7 @@ def heatmap_fig(symbol: str, lang: str, day: str | None = None,
                          title=dict(text=t(lang, "heat_axis_bn"),
                                     font=dict(color=C["muted"])))
     fig.update_layout(**lay)
-    apply_chart_theme(fig)
+    fig = apply_market_theme(fig)
     return fig
 
 
@@ -691,7 +710,7 @@ def _price_overlay(symbol: str, day: str) -> pd.DataFrame | None:
 
 
 def gamma_flow_fig(symbol: str, lang: str, day: str | None = None,
-                   series: list[str] | None = None) -> go.Figure:
+                   series: list[str] | None = None, bucket: str = "Tout") -> go.Figure:
     """Gamma échangé cumulé sur la séance, calls contre puts.
 
     L'équivalent d'un CVD appliqué au gamma : chaque pas de temps ajoute le
@@ -704,12 +723,21 @@ def gamma_flow_fig(symbol: str, lang: str, day: str | None = None,
     feed. On mesure l'activité pondérée par le gamma, pas un flux signé.
     """
     day = day or datetime.now(ET).strftime("%Y-%m-%d")
-    flows, src = flow_source(symbol, day, ("net_gamma_calls", "net_gamma_puts"))
+    flows, src = flow_source(symbol, day, ("net_gamma_calls", "net_gamma_puts"), bucket)
     signe = src == "dxfeed"
     title = guided(t(lang, "gflow_title_signed" if signe else "gflow_title"), "gflow")
+
+    # Simplified: always use total gamma to ensure data shows
     col_c, col_p = ("net_gamma_calls", "net_gamma_puts") if signe else ("gflow_calls", "gflow_puts")
+
     if flows.empty or col_c not in flows.columns:
-        return empty_fig(t(lang, "no_flow_day", day=day), title)
+        # Enhanced empty state with context
+        from .chart_utils import empty_fig
+        return empty_fig(
+            t(lang, "no_flow_day", day=day),
+            title,
+            context={"date": day, "symbol": symbol, "mode": "historical" if day else "live"}
+        )
     series = series if series is not None else ["calls", "puts", "net"]
     ts = to_local(flows["timestamp"])
     calls = np.cumsum(flows[col_c].fillna(0.0).to_numpy()) / 1e9
@@ -728,16 +756,59 @@ def gamma_flow_fig(symbol: str, lang: str, day: str | None = None,
         fig.add_scatter(x=ts, y=net, mode="lines", name=t(lang, "legend_gnet"),
                         line=dict(color=C["ink"], width=2),
                         hovertemplate=f"%{{x|%H:%M}}<br>{t(lang, 'legend_gnet')}: %{{y:+.2f}} $Bn<extra></extra>")
-    lay = with_legend(base_layout(title, height=320))
+
+    # Use new unified theme system
+    from .chart_theme import market_chart_layout, apply_market_theme, zero_line_style
+    from .chart_utils import with_legend
+
+    lay = with_legend(market_chart_layout(title, height=320))
     lay["yaxis"]["title"] = dict(text=t(lang, "axis_gflow_bn"),
                                  font=dict(color=C["muted"]))
     fig.update_layout(**lay)
-    apply_chart_theme(fig)
-    fig.add_hline(y=0, line_color=C["axis"], line_width=1)
+    fig = apply_market_theme(fig)
+    # Use new zero line styling
+    zero_style = zero_line_style()
+    fig.add_hline(y=0, **zero_style)
     return fig
 
 
-def flow_source(symbol: str, day: str, dx_cols: tuple[str, ...]):
+def _snapshot_flow(symbol: str, day: str, bucket: str = "Tout") -> pd.DataFrame:
+    """Build one close-of-session proxy bar from cumulative option volume."""
+    snapshot = store.load_last_snapshot(symbol, day)
+    if snapshot is None or snapshot.empty:
+        return pd.DataFrame()
+    snapshot = snapshot.copy()
+    snapshot["expiry"] = pd.to_datetime(snapshot["expiry"]).dt.date
+    today = datetime.strptime(day, "%Y-%m-%d").date()
+    selected = snapshot[metrics.bucket_mask(snapshot, bucket, today)]
+    if selected.empty:
+        return pd.DataFrame()
+    spot = float(selected["spot"].iloc[0])
+    volume = selected["volume"].fillna(0.0).clip(lower=0.0)
+    calls = selected["type"] == "C"
+    delta = selected["delta_bs"].fillna(selected["delta_cboe"]).fillna(0.0)
+    signed = volume * delta * CONTRACT_MULTIPLIER * spot
+    gamma = selected["gamma_bs"].fillna(selected["gamma_cboe"]).fillna(0.0)
+    gsign = np.where(calls, 1.0, -1.0)
+    gsigned = volume * gamma * gsign * CONTRACT_MULTIPLIER * spot ** 2 * 0.01
+    captured = selected.get("_snapshot_meta_captured_at")
+    timestamp = pd.to_datetime(captured.iloc[0]) if captured is not None else pd.Timestamp(day)
+    if getattr(timestamp, "tzinfo", None) is not None:
+        timestamp = timestamp.tz_convert(ET).tz_localize(None)
+    return pd.DataFrame([{
+        "timestamp": timestamp,
+        "flow_total": float(signed.sum()),
+        "flow_calls": float(signed[calls].sum()),
+        "flow_puts": float(signed[~calls].sum()),
+        "gflow_total": float(gsigned.sum()),
+        "gflow_calls": float(gsigned[calls].sum()),
+        "gflow_puts": float(gsigned[~calls].sum()),
+        "contracts_traded": float(volume.sum()),
+    }])
+
+
+def flow_source(symbol: str, day: str, dx_cols: tuple[str, ...],
+                bucket: str = "Tout"):
     """(données, source) pour les graphiques de flux, selon UNE règle unique :
     dxFeed s'il est disponible, CBOE sinon.
 
@@ -763,7 +834,33 @@ def flow_source(symbol: str, day: str, dx_cols: tuple[str, ...]):
     tape = store.load_tape(symbol, day)
     if not tape.empty and all(c in tape.columns for c in dx_cols):
         return tape.sort_values("timestamp"), "dxfeed"
-    return store.load_flows(symbol, day), "cboe"
+    flows = store.load_flows(symbol, day)
+    if not flows.empty and any(
+        c in flows.columns and flows[c].fillna(0).abs().sum() > 0
+        for c in ("flow_total", "gflow_total", "contracts_traded")
+    ):
+        return flows, "cboe"
+
+    snapshot_flow = _snapshot_flow(symbol, day, bucket)
+    if not snapshot_flow.empty:
+        return snapshot_flow, "cboe"
+
+    # A file for the current date can exist after close with only zero deltas.
+    # Fall back to the latest session with real activity so historical charts
+    # remain useful until the next market session produces data.
+    for fallback_day in reversed(available_flow_days(symbol)):
+        if fallback_day == day:
+            continue
+        candidate_tape = store.load_tape(symbol, fallback_day)
+        if not candidate_tape.empty and all(c in candidate_tape.columns for c in dx_cols):
+            return candidate_tape.sort_values("timestamp"), "dxfeed"
+        candidate_flows = store.load_flows(symbol, fallback_day)
+        if not candidate_flows.empty and any(
+            c in candidate_flows.columns and candidate_flows[c].fillna(0).abs().sum() > 0
+            for c in ("flow_total", "gflow_total", "contracts_traded")
+        ):
+            return candidate_flows, "cboe"
+    return flows, "cboe"
 
 
 def _fmt_notional(v) -> str:
@@ -846,7 +943,52 @@ def tape_fig(symbol: str, lang: str, day: str | None = None,
     tape = store.load_tape(symbol, day)
     title = guided(t(lang, "tape_title"), "tape")
     if tape.empty:
-        return empty_fig(t(lang, "no_tape_day", day=day), title)
+        # A CBOE proxy keeps the panel useful when signed tape is unavailable.
+        # It is deliberately labeled as non-signed activity below.
+        proxy = store.load_flows(symbol, day)
+        if (
+            proxy.empty
+            or "flow_total" not in proxy.columns
+            or not proxy["flow_total"].fillna(0).abs().sum()
+        ):
+            proxy = _snapshot_flow(symbol, day)
+        if proxy.empty or "flow_total" not in proxy.columns:
+            from .chart_utils import empty_fig
+            return empty_fig(
+                t(lang, "no_tape_day", day=day),
+                title,
+                context={"date": day, "symbol": symbol, "mode": "historical" if day else "live"}
+            )
+        title = guided(t(lang, "flow_title"), "tape")
+        proxy = proxy.sort_values("timestamp")
+        ts = to_local(proxy["timestamp"])
+        net = np.cumsum(proxy["flow_total"].fillna(0.0).to_numpy()) / 1e6
+        calls = np.cumsum(proxy.get("flow_calls", 0.0)) / 1e6
+        puts = np.cumsum(proxy.get("flow_puts", 0.0)) / 1e6
+        fig = go.Figure()
+        if series is None or "net" in series:
+            fig.add_scatter(x=ts, y=net, mode="lines",
+                            name=t(lang, "legend_cum"),
+                            line=dict(color=C["accent"], width=3.2, shape="spline"),
+                            fill="tozeroy",
+                            fillcolor="rgba(137, 220, 255, 0.12)",
+                            hovertemplate="%{x|%H:%M}<br>%{y:+,.1f} $M<extra></extra>")
+        if series is None or "calls" in series:
+            fig.add_scatter(x=ts, y=calls, mode="lines",
+                            name=t(lang, "legend_tape_calls"),
+                            line=dict(color=C["pos"], width=1.9, dash="dot"))
+        if series is None or "puts" in series:
+            fig.add_scatter(x=ts, y=puts, mode="lines",
+                            name=t(lang, "legend_tape_puts"),
+                            line=dict(color=C["neg"], width=1.9, dash="dot"))
+        from .chart_theme import market_chart_layout, apply_market_theme, zero_line_style
+        from .chart_utils import with_legend
+        lay = with_legend(market_chart_layout(title, height=340))
+        lay["yaxis"]["title"] = dict(text=t(lang, "axis_cum_m"), font=dict(color=C["muted"]))
+        fig.update_layout(**lay)
+        fig = apply_market_theme(fig)
+        fig.add_hline(y=0, **zero_line_style())
+        return fig
     series = series if series is not None else ["net", "calls", "puts"]
     tape = tape.sort_values("timestamp")
     ts = to_local(tape["timestamp"])
@@ -882,7 +1024,11 @@ def tape_fig(symbol: str, lang: str, day: str | None = None,
                        line=dict(color=color, width=1.9, dash="dot", shape="spline"),
                        hovertemplate=(f"%{{x|%H:%M}}<br>{name}: %{{y:+,.0f}}"
                                        f" {t(lang, 'unit_contracts')}<extra></extra>"))
-    lay = with_legend(base_layout(title, height=340))
+    # Use new unified theme system
+    from .chart_theme import market_chart_layout, apply_market_theme, zero_line_style
+    from .chart_utils import with_legend
+
+    lay = with_legend(market_chart_layout(title, height=340))
     lay["yaxis"]["title"] = dict(text=axis, font=dict(color=C["muted"]))
     lay["margin"]["r"] = 64
     lay["yaxis2"] = dict(overlaying="y", side="right", showgrid=False,
@@ -890,19 +1036,30 @@ def tape_fig(symbol: str, lang: str, day: str | None = None,
                          title=dict(text=t(lang, "axis_tape"),
                                     font=dict(color=C["muted"]), standoff=8))
     fig.update_layout(**lay)
-    apply_chart_theme(fig)
-    fig.add_hline(y=0, line_color=C["axis"], line_width=1)
+    fig = apply_market_theme(fig)
+    # Use new zero line styling
+    zero_style = zero_line_style()
+    fig.add_hline(y=0, **zero_style)
     return fig
 
 
-def flow_fig(symbol: str, lang: str, day: str | None = None) -> go.Figure:
+def flow_fig(symbol: str, lang: str, day: str | None = None, bucket: str = "Tout") -> go.Figure:
     day = day or datetime.now(ET).strftime("%Y-%m-%d")
-    flows, src = flow_source(symbol, day, ("net_delta",))
+    flows, src = flow_source(symbol, day, ("net_delta",), bucket)
     signe = src == "dxfeed"
     title = guided(t(lang, "flow_title_signed" if signe else "flow_title"), "flow")
+
+    # Simplified: always use total flow to ensure data shows
     col = "net_delta" if signe else "flow_total"
+
     if flows.empty or col not in flows.columns:
-        return empty_fig(t(lang, "no_flow_day", day=day), title)
+        # Enhanced empty state with context
+        from .chart_utils import empty_fig
+        return empty_fig(
+            t(lang, "no_flow_day", day=day),
+            title,
+            context={"date": day, "symbol": symbol, "mode": "historical" if day else "live"}
+        )
     ts = to_local(flows["timestamp"])
     vals = flows[col].fillna(0.0).to_numpy() / 1e6
     cum = np.cumsum(vals)
@@ -927,17 +1084,21 @@ def flow_fig(symbol: str, lang: str, day: str | None = None) -> go.Figure:
         fillcolor="rgba(137, 220, 255, 0.08)",
         hovertemplate=f"%{{x|%H:%M}}<br>{t(lang, 'hover_cum')}: %{{y:.1f}} $M<extra></extra>",
     )
-    lay = base_layout(title, height=300)
+    # Use new unified theme system
+    from .chart_theme import market_chart_layout, apply_market_theme, zero_line_style
+
+    lay = market_chart_layout(title, height=380)
     lay["yaxis"] = dict(domain=[0.55, 1.0], gridcolor=C["grid"], zerolinecolor=C["axis"],
                         title=dict(text=t(lang, "axis_m_per_min"), font=dict(color=C["muted"])),
                         tickfont=dict(color=C["muted"]))
     lay["yaxis2"] = dict(domain=[0.0, 0.45], gridcolor=C["grid"], zerolinecolor=C["axis"],
                          title=dict(text=t(lang, "axis_cum_m"), font=dict(color=C["muted"])),
                          tickfont=dict(color=C["muted"]))
-    lay["height"] = 380
     fig.update_layout(**lay)
-    apply_chart_theme(fig)
-    fig.add_hline(y=0, line_color=C["axis"], line_width=1)
+    fig = apply_market_theme(fig)
+    # Use new zero line styling
+    zero_style = zero_line_style()
+    fig.add_hline(y=0, **zero_style)
     return fig
 
 
@@ -959,10 +1120,13 @@ def history_fig(symbol: str, lang: str) -> go.Figure:
         fillcolor="rgba(137, 220, 255, 0.12)",
         hovertemplate="%{x|%d/%m %H:%M}<br>GEX: %{y:.1f} $Bn<extra></extra>",
     )
-    lay = base_layout(title, height=300)
+    # Use new unified theme system
+    from .chart_theme import market_chart_layout, apply_market_theme
+
+    lay = market_chart_layout(title, height=300)
     lay["margin"]["t"] = 62
     fig.update_layout(**lay)
-    apply_chart_theme(fig)
+    fig = apply_market_theme(fig)
     fig.update_xaxes(**time_range_selector(), range=default_window(ts))
     return fig
 
@@ -994,21 +1158,31 @@ def spot_zg_fig(symbol: str, lang: str) -> go.Figure:
         line=dict(color=C["zg"], width=2.6, dash="dash", shape="spline"),
         hovertemplate="%{x|%d/%m %H:%M}<br>Gamma Flip: %{y:.0f}<extra></extra>",
     )
-    lay = base_layout(title, height=300)
-    lay = with_legend(lay)
+    # Use new unified theme system
+    from .chart_theme import market_chart_layout, apply_market_theme
+    from .chart_utils import with_legend
+
+    lay = with_legend(market_chart_layout(title, height=300))
     fig.update_layout(**lay)
+    fig = apply_market_theme(fig)
     fig.update_xaxes(**time_range_selector(), range=default_window(ts))
     return fig
 
 
-def smile_fig(df: pd.DataFrame, spot: float, lang: str) -> go.Figure:
+def smile_fig(df: pd.DataFrame, spot: float, lang: str, bucket: str = "Tout") -> go.Figure:
     title = guided(t(lang, "smile_title"), "smile")
+    # Apply bucket filtering
+    today = datetime.now(ET).date()
+    if bucket != "Tout":
+        df = df[metrics.bucket_mask(df, bucket, today)]
+        title = guided(t(lang, "smile_title"), "smile") + f" ({bucket})"
     d = df[(df["iv"] > 0.01) & (df["open_interest"] > 0)
            & df["strike"].between(spot * 0.85, spot * 1.15)]
     otm = d[((d["type"] == "P") & (d["strike"] <= spot)) | ((d["type"] == "C") & (d["strike"] > spot))]
     expiries = sorted(otm["expiry"].unique())[:4]
     if not expiries:
-        return empty_fig(t(lang, "no_iv"), title)
+        from .chart_utils import empty_fig
+        return empty_fig(t(lang, "no_iv"), title, context={"bucket": bucket})
     fig = go.Figure()
     for i, exp in enumerate(expiries):
         e = otm[otm["expiry"] == exp].sort_values("strike")
@@ -1023,9 +1197,13 @@ def smile_fig(df: pd.DataFrame, spot: float, lang: str) -> go.Figure:
            fillcolor="rgba(137, 220, 255, 0.04)",
            hovertemplate=f"{exp}<br>{t(lang, 'hover_strike')} %{{x}}<br>IV: %{{y:.1f}}%<extra></extra>",
         )
-    lay = base_layout(title, height=300)
-    lay = with_legend(lay)
+    # Use new unified theme system
+    from .chart_theme import market_chart_layout, apply_market_theme
+    from .chart_utils import with_legend
+
+    lay = with_legend(market_chart_layout(title, height=300))
     fig.update_layout(**lay)
+    fig = apply_market_theme(fig)
     fig.add_vline(x=spot, line_color=C["spot"], line_dash="dot", line_width=1)
     fig.update_yaxes(title_text=t(lang, "axis_iv"), title_font=dict(color=C["muted"]))
     return fig
@@ -1065,13 +1243,20 @@ def profile_fig(df: pd.DataFrame, spot: float, zg: float | None, lang: str,
         name="GEX −",
         hovertemplate="%{x:.0f}<br>%{y:.1f} $Bn<extra></extra>",
     )
-    fig.update_layout(**base_layout(title, height=420))
+    # Use new unified theme system
+    from .chart_theme import market_chart_layout, apply_market_theme, zero_line_style
+    from .chart_utils import add_spot_band
+
+    fig.update_layout(**market_chart_layout(title, height=420))
+    fig = apply_market_theme(fig)
     fig.update_xaxes(title_text=t(lang, "profile_axis"), title_font=dict(color=C["muted"]))
     fig.update_yaxes(title_text="$Bn / 1%", title_font=dict(color=C["muted"]))
-    fig.add_hline(y=0, line_color=C["axis"], line_width=1)
+    # Use new zero line styling
+    zero_style = zero_line_style()
+    fig.add_hline(y=0, **zero_style)
     lo = xf(spot * (1 - window))
     hi = xf(spot * (1 + window))
-    _spot_band(fig, lo, hi, color="rgba(137, 220, 255, 0.04)")
+    add_spot_band(fig, lo, hi, color="rgba(137, 220, 255, 0.04)")
     fig.add_vline(x=xf(spot), line_color=C["spot"], line_dash="dot", line_width=1,
                   annotation_text=f"Spot {xf(spot):.0f}",
                   annotation_font=dict(color=C["ink"], size=10),
@@ -1107,10 +1292,16 @@ def profile_by_expiry_fig(df: pd.DataFrame, spot: float, lang: str,
         drawn += 1
     if drawn == 0:
         return empty_fig(t(lang, "no_data_window"), title)
-    lay = base_layout(title, height=340)
-    lay = with_legend(lay)
+    # Use new unified theme system
+    from .chart_theme import market_chart_layout, apply_market_theme, zero_line_style
+    from .chart_utils import with_legend
+
+    lay = with_legend(market_chart_layout(title, height=340))
     fig.update_layout(**lay)
-    fig.add_hline(y=0, line_color=C["axis"], line_width=1)
+    fig = apply_market_theme(fig)
+    # Use new zero line styling
+    zero_style = zero_line_style()
+    fig.add_hline(y=0, **zero_style)
     fig.add_vline(x=xf(spot), line_color=C["spot"], line_dash="dot", line_width=1)
     fig.update_xaxes(title_text=t(lang, "profile_axis"), title_font=dict(color=C["muted"]))
     return fig
@@ -1134,8 +1325,13 @@ def second_order_fig(df: pd.DataFrame, spot: float, col: str, title: str,
         opacity=0.98,
         hovertemplate="%{y}<br>%{x:.1f} $M<extra></extra>",
     ))
-    fig.update_layout(**base_layout(title, height=460))
-    _spot_band(fig, xf(lo), xf(hi), color="rgba(137, 220, 255, 0.04)")
+    # Use new unified theme system
+    from .chart_theme import market_chart_layout, apply_market_theme
+    from .chart_utils import add_spot_band
+
+    fig.update_layout(**market_chart_layout(title, height=460))
+    fig = apply_market_theme(fig)
+    add_spot_band(fig, xf(lo), xf(hi), color="rgba(137, 220, 255, 0.04)")
     fig.add_hline(y=xf(spot), line_color=C["spot"], line_dash="dot", line_width=1,
                   annotation_text=f"Spot {xf(spot):.0f}", annotation_font_color=C["ink"],
                   annotation_position="top right")
@@ -1168,10 +1364,14 @@ def oi_change_fig(chg: pd.DataFrame, spot: float, lang: str, prev_day: str,
                 name=t(lang, "legend_puts"),
                 marker=dict(color=C["cat"][1], line=dict(width=0)),
                 hovertemplate="%{y}<br>Puts %{x:+.1f}k<extra></extra>")
-    lay = base_layout(title, height=520)
-    lay = with_legend(lay)
+    # Use new unified theme system
+    from .chart_theme import market_chart_layout, apply_market_theme
+    from .chart_utils import with_legend
+
+    lay = with_legend(market_chart_layout(title, height=520))
     lay["barmode"] = "group"
     fig.update_layout(**lay)
+    fig = apply_market_theme(fig)
     fig.add_hline(y=xf(spot), line_color=C["spot"], line_dash="dot", line_width=1,
                   annotation_text=f"Spot {xf(spot):.0f}", annotation_font_color=C["ink"],
                   annotation_position="top right")
@@ -1699,9 +1899,10 @@ def create_app() -> Dash:
             return [html.Span(t(lang, "levels_unavailable"),
                               style={"color": C["muted"], "fontSize": "12px"})]
         exp = levels["expiry"].iloc[0]
+        exp_label = exp.strftime("%d/%m") if hasattr(exp, "strftime") else str(exp)
         labels = wall_labels(levels)
         xf = xf or (lambda v: v)
-        items = [html.Span(t(lang, "levels_prefix", exp=f"{exp:%d/%m}"),
+        items = [html.Span(t(lang, "levels_prefix", exp=exp_label),
                            style={"color": C["muted"], "fontSize": "12px", "marginRight": "4px"})]
         if scale_note:
             items.append(html.Span(scale_note, className="scale-note"))
@@ -1963,8 +2164,70 @@ def create_app() -> Dash:
                     empty_fig(wait, t(lang, "smile_title")),
                     "", t(lang, "tv_copy_title", scale=unit),
                 )
-        today = datetime.now(ET).date()
-        sel = df[metrics.bucket_mask(df, bucket, today)]
+        # BUG FIX: Respect selected historical date for ALL charts
+        today_str = datetime.now(ET).strftime("%Y-%m-%d")
+        is_historical = flow_day and flow_day != today_str
+        # Flow files are independent from snapshots. A closed market can have
+        # no snapshot for the selected day while historical flow data remains
+        # available and must still be rendered.
+        flow_chart_day = flow_day if flow_day else None
+
+        if is_historical:
+            # Load historical snapshot for selected date
+            hist_df = store.load_last_snapshot(symbol, flow_day)
+            if hist_df is None or hist_df.empty:
+                # No historical data available - fallback to today's data
+                is_historical = False
+                selected_date = datetime.now(ET).date()
+                # Use live data instead
+                st = chain_state(symbol)
+                with STATE.lock:
+                    df = st.enriched
+                    snap = st.snapshot
+                    summary = st.summary
+                if df is None or snap is None:
+                    # If still no data, then show empty states
+                    from .chart_utils import empty_fig
+                    empty_msg = t(lang, "no_data_window")
+                    empty_context = {
+                        "date": flow_day,
+                        "symbol": symbol,
+                        "mode": "historical",
+                        "data_status": "no_data"
+                    }
+                    return (
+                        levels_strip(None, lang),
+                        empty_fig(empty_msg, guided(t(lang, "gex_title", bucket=bucket_label), "gex_strike"), empty_context),
+                        empty_fig(empty_msg, guided(t(lang, "dex_title", bucket=bucket_label), "dex_strike"), empty_context),
+                        empty_fig(empty_msg, t(lang, "flow_title"), empty_context),
+                        empty_fig(empty_msg, t(lang, "gflow_title"), empty_context),
+                        empty_fig(empty_msg, t(lang, "tape_title"), empty_context),
+                        empty_fig(t(lang, "hist_title")),
+                        empty_fig(t(lang, "spotzg_title")),
+                        empty_fig(empty_msg, t(lang, "smile_title"), empty_context),
+                        "", t(lang, "tv_copy_title", scale=unit),
+                    )
+            else:
+                # Use historical data
+                spot = float(hist_df['spot'].iloc[0])
+                hist_snap = type('obj', (object,), {'spot': spot})()
+                snap_obj = type('obj', (object,), {
+                    'symbol': symbol,
+                    'spot': spot,
+                    'feed_timestamp': datetime.now(ET),
+                    'fetched_at': datetime.now(ET),
+                    'options': hist_df
+                })()
+                # Historical snapshot already has enriched columns (gex, dex)
+                enriched = hist_df
+                summary = metrics.summarize(snap_obj, enriched, with_basis=False)
+                df, snap, summary = hist_df, hist_snap, summary
+                selected_date = datetime.strptime(flow_day, "%Y-%m-%d").date()
+        else:
+            # Use live data (today)
+            selected_date = datetime.now(ET).date()
+
+        sel = df[metrics.bucket_mask(df, bucket, selected_date)]
         zg = summary.zero_gamma if summary else None
 
         def _pin(fig, rev):
@@ -1995,14 +2258,18 @@ def create_app() -> Dash:
                               guided(t(lang, "dex_title", bucket=bucket_label), "dex_strike"), lang,
                               hvl=hvl, window=window, xf=xf, keys=keys,
                               level_set="regime"), rev),
-            _pin(flow_fig(symbol, lang, flow_day), f"{symbol}-{flow_day}"),
-            _pin(gamma_flow_fig(symbol, lang, flow_day, gflow_series),
-                f"g{symbol}-{flow_day}-{gflow_series}"),
-            _pin(tape_fig(symbol, lang, flow_day, tape_series),
-                f"t{symbol}-{flow_day}-{tape_series}"),
+            # BUG FIX: Use flow_day for historical mode, None for live mode
+            # BUG FIX: Pass bucket parameter to flow functions for 0DTE filtering
+            _pin(flow_fig(symbol, lang, flow_chart_day, bucket),
+                f"{symbol}-{flow_chart_day or 'live'}-{bucket}"),
+            _pin(gamma_flow_fig(symbol, lang, flow_chart_day, gflow_series, bucket),
+                f"g{symbol}-{flow_chart_day or 'live'}-{bucket}-{gflow_series}"),
+            # Note: tape_fig doesn't support bucket filtering (no expiry data in tape)
+            _pin(tape_fig(symbol, lang, flow_chart_day, tape_series),
+                f"t{symbol}-{flow_chart_day or 'live'}-{tape_series}"),
             _pin(history_fig(symbol, lang), symbol),
             _pin(spot_zg_fig(symbol, lang), symbol),
-            _pin(smile_fig(sel, snap.spot, lang), rev),
+            _pin(smile_fig(sel, snap.spot, lang, bucket), rev),
             tv_levels_string(levels, hvl, zg, keys, xf),
             t(lang, "tv_copy_title", scale=unit),
         )
@@ -2145,10 +2412,26 @@ def create_app() -> Dash:
     def update_flow_days(symbol, _, current):
         days = available_flow_days(symbol)
         opts = [{"label": d, "value": d} for d in days]
-        # Don't overwrite user selection on tick
-        # Fallback to last day on symbol change
-        if ctx.triggered_id == "tick" and current in days:
+
+        def has_activity(day: str) -> bool:
+            flows = store.load_flows(symbol, day)
+            if not flows.empty and any(
+                c in flows.columns and flows[c].fillna(0).abs().sum() > 0
+                for c in ("flow_total", "gflow_total", "contracts_traded")
+            ):
+                return True
+            return not store.load_tape(symbol, day).empty
+
+        # Keep a selected day only while it contains actual flow data. This
+        # avoids locking the charts to a post-close file containing zero deltas.
+        if ctx.triggered_id == "tick" and current in days and has_activity(current):
             return opts, current
+
+        # Prefer the newest session that actually contains activity. During a
+        # closed market the newest file may exist but contain only zero deltas.
+        for day in reversed(days):
+            if has_activity(day):
+                return opts, day
         return opts, (days[-1] if days else None)
 
     @app.callback(
