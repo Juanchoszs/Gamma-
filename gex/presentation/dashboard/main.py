@@ -7,7 +7,7 @@ Interface FR/EN (gex/i18n.py) ; termes de trading standards dans les deux.
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from time import monotonic
 
@@ -36,6 +36,7 @@ from gex.infrastructure.config import SETTINGS, UNDERLYINGS, targets, all_target
 from gex.presentation.i18n.i18n import LANGS, regime_text, t, wall_labels
 from gex.domain.gex.metrics import ET, EXPIRY_BUCKETS
 from gex.adapters.market_data import idxopt
+from gex.adapters.market_data.flowtape import TAPE
 from gex.adapters.market_data.rtquote import PUBLIC_QUOTES, QUOTES, credentials_present
 from gex.infrastructure.scheduling.scheduler import STATE, market_is_open
 from gex.infrastructure.scheduling.scheduler import native_index_key as scheduler_native_key
