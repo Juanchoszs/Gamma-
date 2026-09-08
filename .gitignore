@@ -1,0 +1,31 @@
+.venv/
+__pycache__/
+*.pyc
+data/
+logs/
+.pytest_cache/
+*.egg-info/
+discord_bot/.env
+.env
+scratch/
+.tools/
+build/
+
+# PyInstaller and compiled distribution artifacts
+dist/
+*.exe
+*.dll
+*.pyd
+
+# Native and packaging build outputs
+*.obj
+*.o
+*.lib
+*.whl
+*.tar.gz
+
+# Local IDE and operating-system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
