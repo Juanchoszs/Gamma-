@@ -5,8 +5,9 @@ sur une page d'erreur, recopier le `code=` de la barre d'adresse, puis `setx`)
 par deux clics : « Connecter », approuver.
 
 Ce qui rend ça possible : l'URI de redirection enregistrée côté tastytrade est
-`http://localhost:8050/oauth/callback`, donc le navigateur revient sur le
-dashboard lui-même — qui peut alors lire le code et faire l'échange.
+`TASTYTRADE_REDIRECT_URI` (par défaut `http://localhost:8050/oauth/callback`),
+donc le navigateur revient sur le dashboard lui-même — qui peut alors lire le
+code et faire l'échange.
 
 ⚠️ Portée. Ces routes ne servent QUE l'autorisation, en scope `read`. Ce
 serveur n'écoute qu'en local (cf. gex/api.py) et le projet n'exécute aucun
@@ -168,7 +169,7 @@ def register_oauth(app) -> None:
             tt_auth.save_credentials(cid, secret, refresh)
             _demarrer_les_flux()
             etat, msg = connection_status()
-            return jsonify({"ok": True, "status": etat, "message": msg, "refresh_token": refresh})
+            return jsonify({"ok": True, "status": etat, "message": msg})
         except Exception as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
 
@@ -200,8 +201,10 @@ def register_oauth(app) -> None:
                          "No se guardó ninguna credencial.", ok=False), 400
 
         state = request.args.get("state")
-        if state and not _consume_state(state):
-            log.warning("OAuth : state non trouvé ou expiré, poursuite de l'échange...")
+        if not _consume_state(state):
+            return _page("Autorización no válida",
+                         "La sesión OAuth expiró o no fue iniciada desde este dashboard. "
+                         "Vuelve a pulsar Conectar y reintenta.", ok=False), 400
 
         code = request.args.get("code")
         if not code:

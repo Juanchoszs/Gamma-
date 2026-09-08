@@ -8,8 +8,8 @@ Usage :
     python -m gex.tt_auth
 
 Le script affiche une URL à ouvrir, tu approuves, ton navigateur est redirigé
-vers https://localhost:8050/oauth/callback (page d'erreur attendue : rien
-n'écoute en HTTPS sur ce port). Le paramètre `code=` de la barre d'adresse est
+vers la URI configurée (par défaut http://localhost:8050/oauth/callback). Le
+paramètre `code=` de la barre d'adresse est
 à recoller ici. Le refresh token obtenu est ensuite à stocker en variable
 d'environnement TT_REFRESH.
 """
@@ -27,7 +27,7 @@ log = logging.getLogger(__name__)
 
 AUTH_URL = "https://my.tastytrade.com/auth.html"
 TOKEN_URL = "https://api.tastyworks.com/oauth/token"
-REDIRECT_URI = "http://localhost:8050/oauth/callback"
+DEFAULT_REDIRECT_URI = "http://localhost:8050/oauth/callback"
 SCOPE = "read"
 
 
@@ -83,6 +83,15 @@ def _find_env_path() -> Path:
         if (parent / "pyproject.toml").exists():
             return parent / ".env"
     return Path.cwd() / ".env"
+
+
+def redirect_uri() -> str:
+    """URI registrada en tastytrade, configurable para local, Render o HTTPS."""
+    configured = os.environ.get("TASTYTRADE_REDIRECT_URI", "").strip()
+    if configured:
+        return configured.rstrip("/")
+    value = _env("TASTYTRADE_REDIRECT_URI")
+    return (value or DEFAULT_REDIRECT_URI).rstrip("/")
 
 
 def _update_env_file(updates: dict[str, str | None]) -> None:
@@ -195,7 +204,7 @@ def credentials() -> tuple[str, str]:
 def authorize_url(client_id: str, state: str | None = None) -> str:
     params = {
         "client_id": client_id,
-        "redirect_uri": REDIRECT_URI,
+        "redirect_uri": redirect_uri(),
         "response_type": "code",
         "scope": SCOPE,
     }
@@ -230,7 +239,7 @@ def exchange_code(client_id: str, secret: str, code: str) -> dict:
             "code": code,
             "client_id": client_id,
             "client_secret": secret,
-            "redirect_uri": REDIRECT_URI,
+            "redirect_uri": redirect_uri(),
         },
         headers={"User-Agent": "gex-dashboard/1.0", "Content-Type": "application/json"},
         timeout=30,
@@ -245,8 +254,8 @@ def main() -> None:
     print("\n1) Ouvre cette URL dans ton navigateur et approuve l'accès :\n")
     print(authorize_url(cid))
     print(
-        "\n2) Tu seras redirigé vers une page d'ERREUR (normal : rien n'écoute"
-        f"\n   sur {REDIRECT_URI}). Dans la barre d'adresse, copie la valeur"
+        "\n2) Tu seras redirigé vers la URI configurée. Dans la barre d'adresse,"
+        f"\n   copie la valeur de code= (URI: {redirect_uri()})"
         "\n   du paramètre code=... (tout ce qui suit 'code=', avant un '&')\n"
     )
     code = input("3) Colle le code ici : ").strip()

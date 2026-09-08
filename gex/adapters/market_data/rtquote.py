@@ -137,7 +137,7 @@ def credentials_present() -> bool:
     has_cid = _is_real_val(_env("TASTYTRADE_CLIENT_ID"))
     has_sec = _is_real_val(_env("TASTYTRADE_CLIENT_SECRET"))
     has_ref = _is_real_val(_env("TT_REFRESH"))
-    return (has_cid and has_sec) or (has_sec and has_ref) or (has_cid and has_ref)
+    return has_cid and has_sec and has_ref
 
 
 
