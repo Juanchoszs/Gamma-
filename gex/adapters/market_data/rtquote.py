@@ -89,6 +89,7 @@ def _is_real_val(v: str | None) -> bool:
         or v_low.startswith("tu_")
         or v_low.startswith("your_")
         or "xxxx" in v_low
+        or v_clean.strip("*") == ""
     )
 
 

@@ -43,7 +43,7 @@ def _env(name: str) -> str | None:
                     if k.strip() == name:
                         cand = v.strip().strip('"').strip("'")
                         cand_low = cand.lower()
-                        if cand and not (cand_low.startswith("pega_aqui") or cand_low.startswith("tu_") or "xxxx" in cand_low):
+                        if cand and not _is_placeholder(cand):
                             os.environ[name] = cand
                             return cand
     except Exception:
@@ -53,7 +53,7 @@ def _env(name: str) -> str | None:
     if val:
         v_clean = str(val).strip().strip('"').strip("'")
         v_low = v_clean.lower()
-        if v_clean and not (v_low.startswith("pega_aqui") or v_low.startswith("tu_") or "xxxx" in v_low):
+        if v_clean and not _is_placeholder(v_clean):
             return v_clean
 
     if sys.platform == "win32":
@@ -64,12 +64,24 @@ def _env(name: str) -> str | None:
                 if wval:
                     cand = str(wval).strip().strip('"').strip("'")
                     cand_low = cand.lower()
-                    if cand and not (cand_low.startswith("pega_aqui") or cand_low.startswith("tu_") or "xxxx" in cand_low):
+                    if cand and not _is_placeholder(cand):
                         os.environ[name] = cand
                         return cand
         except OSError:
             pass
     return None
+
+
+def _is_placeholder(value: str) -> bool:
+    """Identifica valores de plantilla que no deben activar la autenticación."""
+    value = value.strip()
+    value_low = value.lower()
+    return (
+        not value
+        or value_low.startswith(("pega_aqui", "tu_", "your_"))
+        or "xxxx" in value_low
+        or value.strip("*") == ""
+    )
 
 
 

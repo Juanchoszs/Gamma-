@@ -3815,7 +3815,7 @@ def create_app() -> Dash:
                         html.Div(id="tt-step-3", children=[
                             html.B("Opción B (Login con Navegador): "),
                             "La ", html.B("Redirect URI"), " en Tastytrade debe ser EXACTAMENTE: ",
-                            html.Code("http://localhost:8050/oauth/callback", className="tt-guide-code"),
+                            html.Code(tt_auth.redirect_uri(), className="tt-guide-code"),
                             " (si difiere, Tastytrade arrojará error 403 Forbidden)."
                         ]),
                     ], className="tt-guide-box"),
