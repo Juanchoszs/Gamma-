@@ -12,6 +12,7 @@ from __future__ import annotations
 from dotenv import load_dotenv
 
 import os
+import threading
 
 from gex.presentation.dashboard.main import create_app
 from gex.adapters.market_data.flowtape import TAPE
@@ -30,6 +31,15 @@ def main(host: str | None = None, port: int | None = None) -> None:
         port = int(os.getenv("PORT", "8050"))
     # consola + logs/gex.log (rotativo): el registro persiste tras cerrar el terminal
     setup_logging()
+    app = create_app()
+
+    # Render debe poder comprobar el puerto antes de iniciar las tareas de red.
+    threading.Thread(target=_start_background_services,
+                     name="gex-services", daemon=True).start()
+    app.run(host=host, port=port, debug=False, threaded=True)
+
+
+def _start_background_services() -> None:
     start_scheduler()
     # spot en tiempo real: sin credenciales de broker, la llamada no tiene efecto
     QUOTES.start()
@@ -39,7 +49,6 @@ def main(host: str | None = None, port: int | None = None) -> None:
     TAPE.start()
     # captura tick a tick continua NQ/ES (24/5): sesión dxLink dedicada
     CAPTURE.start()
-    create_app().run(host=host, port=port, debug=False, threaded=True)
 
 
 if __name__ == "__main__":
