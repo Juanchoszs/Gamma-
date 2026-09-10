@@ -16,9 +16,10 @@ from pathlib import Path
 
 from gex.infrastructure.config import DATA_DIR
 
-# logs/ à côté de data/ : racine du dépôt en développement, dossier courant
-# après un pip install (cf. gex.config._default_data_dir).
-LOG_DIR = DATA_DIR.parent / "logs"
+# En producción DATA_DIR suele ser `/data`; su directorio padre (`/`) no es
+# escribible por el usuario del contenedor. Mantener los logs dentro del
+# volumen de datos también permite conservarlos entre reinicios.
+LOG_DIR = DATA_DIR / "logs"
 LOG_FILE = LOG_DIR / "gex.log"
 REPORTS_FILE = LOG_DIR / "reports.md"
 
