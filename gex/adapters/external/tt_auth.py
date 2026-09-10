@@ -23,6 +23,8 @@ from pathlib import Path
 
 import requests
 
+from gex.application.tastytrade.auth import TastytradeAuthClient
+
 log = logging.getLogger(__name__)
 
 AUTH_URL = "https://my.tastytrade.com/auth.html"
@@ -244,21 +246,14 @@ def store_refresh(token: str) -> str:
 
 
 def exchange_code(client_id: str, secret: str, code: str) -> dict:
-    resp = requests.post(
-        TOKEN_URL,
-        json={
-            "grant_type": "authorization_code",
-            "code": code,
-            "client_id": client_id,
-            "client_secret": secret,
-            "redirect_uri": redirect_uri(),
-        },
-        headers={"User-Agent": "gex-dashboard/1.0", "Content-Type": "application/json"},
-        timeout=30,
+    token = TastytradeAuthClient().exchange_code(
+        code, client_id, secret, redirect_uri()
     )
-    if resp.status_code != 200:
-        raise SystemExit(f"Échec de l'échange ({resp.status_code}) : {resp.text[:400]}")
-    return resp.json()
+    return {
+        "access_token": token.access_token,
+        "refresh_token": token.refresh_token,
+        "expires_in": token.expires_in,
+    }
 
 
 def main() -> None:

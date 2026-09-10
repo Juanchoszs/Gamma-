@@ -28,6 +28,8 @@ from datetime import date, timedelta
 
 import requests
 
+from gex.application.tastytrade.auth import TastytradeAuthClient
+
 from gex.infrastructure.config import UNDERLYINGS
 
 log = logging.getLogger(__name__)
@@ -211,28 +213,11 @@ def _quote_token_uncached() -> tuple[str, str, str]:
         url = _env("DXFEED_ENDPOINT") or "wss://live.dxfeed.com/live/websocket"
         return dx_direct, url, ""
 
-    r = requests.post(
-        TOKEN_URL,
-        json={
-            "grant_type": "refresh_token",
-            "refresh_token": _env("TT_REFRESH"),
-            "client_secret": _env("TASTYTRADE_CLIENT_SECRET"),
-        },
-        headers={"User-Agent": "gex-dashboard/1.0", "Content-Type": "application/json"},
-        timeout=30,
+    token = TastytradeAuthClient().refresh(
+        _env("TT_REFRESH") or "",
+        _env("TASTYTRADE_CLIENT_SECRET") or "",
     )
-    if not r.ok:
-        try:
-            error = r.json()
-        except ValueError:
-            error = {"body": r.text[:200]}
-        detail = (error.get("error_code") or error.get("error")
-                  or error.get("error_description") or error.get("body", "unknown error"))
-        raise requests.HTTPError(
-            f"Tastytrade OAuth rejected refresh token ({r.status_code}): {detail}",
-            response=r,
-        )
-    access = r.json()["access_token"]
+    access = token.access_token
     q = requests.get(
         QUOTE_TOKEN_URL,
         headers={"Authorization": f"Bearer {access}", "User-Agent": "gex-dashboard/1.0"},
