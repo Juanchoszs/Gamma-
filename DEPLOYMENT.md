@@ -61,3 +61,70 @@ con Docker. El proveedor no necesita conocer las credenciales de Tastytrade.
 
 No subas `.env`, `TT_REFRESH`, `TASTYTRADE_CLIENT_SECRET` ni tokens de dxFeed al
 repositorio. Usa el gestor de secretos del proveedor.
+
+## Verificación manual con Postman
+
+Esta prueba valida directamente el `refresh_token`, sin pasar por Render.
+Postman debe ejecutarse en tu equipo y las credenciales deben introducirse
+como variables locales o temporales; no guardes valores reales en una
+colección compartida.
+
+1. Crea una petición nueva con método **POST**:
+
+   ```text
+   https://api.tastyworks.com/oauth/token
+   ```
+
+2. En **Headers** añade:
+
+   | Key | Value |
+   | --- | --- |
+   | `User-Agent` | `gex-postman/1.0` |
+   | `Content-Type` | `application/json` |
+
+3. En **Body → raw → JSON** introduce:
+
+   ```json
+   {
+     "grant_type": "refresh_token",
+     "refresh_token": "{{TT_REFRESH}}",
+     "client_secret": "{{TASTYTRADE_CLIENT_SECRET}}"
+   }
+   ```
+
+4. Define en el entorno local de Postman estas variables:
+
+   ```text
+   TT_REFRESH
+   TASTYTRADE_CLIENT_SECRET
+   ```
+
+   Usa el icono de ojo para confirmar que Postman está usando el valor
+   activo. No incluyas `TASTYTRADE_CLIENT_ID` en esta petición: Tastytrade
+   documenta `client_id` como opcional para renovar un grant y el servidor lo
+   infiere del refresh token.
+
+5. Pulsa **Send**. Una renovación correcta devuelve `200 OK` y un JSON con
+   `access_token`, `token_type` y `expires_in`. No guardes ni compartas el
+   `access_token`.
+
+6. Si devuelve `400` con `invalid_grant` / `Invalid JWT`, el refresh token no
+   es válido para Tastytrade (grant eliminado, secreto regenerado, token
+   truncado o valor pegado con comillas/espacios). Crea un grant nuevo y
+   repite la prueba.
+
+7. Si devuelve `200`, Render no debe usar valores distintos. Copia los mismos
+   valores exactos a sus variables `TT_REFRESH` y
+   `TASTYTRADE_CLIENT_SECRET`, guarda y ejecuta un redeploy.
+
+Para verificar el servicio web por separado, crea otra petición **GET** a:
+
+```text
+https://TU_DOMINIO/healthz
+```
+
+Debe devolver `200 OK`:
+
+```json
+{"service":"gex-dashboard","status":"ok"}
+```
