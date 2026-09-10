@@ -16,6 +16,9 @@ def test_dashboard_uses_packaged_assets_and_registers_callbacks():
     assert Path(app.config.assets_folder).is_dir()
     assert any("heatmap-intraday.figure" in key for key in app.callback_map)
     assert any("options-flow-overlay.figure" in key for key in app.callback_map)
+    response = app.server.test_client().get("/healthz")
+    assert response.status_code == 200
+    assert response.get_json() == {"status": "ok", "service": "gex-dashboard"}
 
 
 def test_overlay_days_require_both_price_and_options_snapshot(monkeypatch):

@@ -32,6 +32,7 @@ dependencies = [
     "dash>=2.18",
     "plotly>=5.24",
     "apscheduler>=3.10",
+    "python-dotenv>=1.0",
     # <2.0 : la 2.0.0 a retiré/déplacé mcp.server.fastmcp, dont dépend
     # gex/mcp_server.py. Sans cette borne, une install fraîche (CI, nouveau
     # poste) récupère la 2.0 et casse la collecte des tests. Migration vers

@@ -4941,6 +4941,13 @@ def create_app() -> Dash:
     register_api(app)
     register_oauth(app)
 
+    @app.server.route("/healthz")
+    def _healthz():
+        """Health check del proceso, sin depender de feeds externos."""
+        from flask import jsonify
+
+        return jsonify({"status": "ok", "service": "gex-dashboard"})
+
     @app.server.route("/api/v1/<symbol>/chart/<name>.png")
     def _chart_png(symbol, name):
         """Graphique en PNG à la demande — n'importe lequel, pas juste la

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import os
 from pathlib import Path
 
 def _default_data_dir() -> Path:
@@ -16,6 +17,8 @@ def _default_data_dir() -> Path:
 
 
 DATA_DIR = _default_data_dir()
+if configured_data_dir := os.environ.get("GEX_DATA_DIR"):
+    DATA_DIR = Path(configured_data_dir).expanduser()
 
 # Taux sans risque annualisé, REPLI uniquement : le calcul live charge le SOFR
 # du jour via gex/rates (current_rate). Cette constante ne sert plus que si
