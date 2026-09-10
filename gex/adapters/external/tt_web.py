@@ -138,7 +138,7 @@ def register_oauth(app) -> None:
         if not cid or not secret:
             return jsonify({"ok": False, "error": "Client ID y Client Secret son obligatorios."}), 400
 
-        tt_auth.save_credentials(cid, secret, refresh)
+        tt_auth.save_credentials(cid, secret, refresh, persist=False)
         if refresh:
             _demarrer_les_flux()
 
@@ -166,7 +166,7 @@ def register_oauth(app) -> None:
             refresh = token_data.get("refresh_token")
             if not refresh:
                 return jsonify({"ok": False, "error": f"No se recibió refresh_token en la respuesta: {token_data}"}), 502
-            tt_auth.save_credentials(cid, secret, refresh)
+            tt_auth.save_credentials(cid, secret, refresh, persist=False)
             _demarrer_les_flux()
             etat, msg = connection_status()
             return jsonify({"ok": True, "status": etat, "message": msg})
@@ -181,7 +181,7 @@ def register_oauth(app) -> None:
         req_cid = request.args.get("client_id")
         req_sec = request.args.get("client_secret")
         if req_cid and req_sec:
-            tt_auth.save_credentials(req_cid, req_sec)
+            tt_auth.save_credentials(req_cid, req_sec, persist=False)
 
         cid = _env("TASTYTRADE_CLIENT_ID")
         if not cid:
@@ -230,7 +230,7 @@ def register_oauth(app) -> None:
                          f"No se encontró el refresh_token en la respuesta de Tastytrade: {data}",
                          ok=False), 502
 
-        note = tt_auth.store_refresh(refresh)
+        note = tt_auth.store_refresh(refresh, persist=False)
         log.info("OAuth tastytrade : connexion réussie. %s", note)
         _demarrer_les_flux()
         return _page("¡Conectado a Tastytrade con éxito!",

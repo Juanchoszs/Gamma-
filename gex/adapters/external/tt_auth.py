@@ -147,7 +147,13 @@ def _update_env_file(updates: dict[str, str | None]) -> None:
         log.warning("Impossible d'écrire dans .env: %s", exc)
 
 
-def save_credentials(client_id: str, client_secret: str, refresh_token: str | None = None) -> None:
+def save_credentials(
+    client_id: str,
+    client_secret: str,
+    refresh_token: str | None = None,
+    *,
+    persist: bool = True,
+) -> None:
     """Enregistre le Client ID, Client Secret et optionnellement le Refresh Token
     dans os.environ, le fichier .env et le registre Windows HKCU."""
     cid = client_id.strip()
@@ -164,9 +170,10 @@ def save_credentials(client_id: str, client_secret: str, refresh_token: str | No
         os.environ["TT_REFRESH"] = ref
         updates["TT_REFRESH"] = ref
 
-    _update_env_file(updates)
+    if persist:
+        _update_env_file(updates)
 
-    if sys.platform == "win32":
+    if persist and sys.platform == "win32":
         import winreg
         try:
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0,
@@ -227,9 +234,12 @@ def authorize_url(client_id: str, state: str | None = None) -> str:
     return f"{AUTH_URL}?{urllib.parse.urlencode(params)}"
 
 
-def store_refresh(token: str) -> str:
+def store_refresh(token: str, *, persist: bool = True) -> str:
     os.environ["TT_REFRESH"] = token
-    _update_env_file({"TT_REFRESH": token})
+    if persist:
+        _update_env_file({"TT_REFRESH": token})
+    if not persist:
+        return "Jeton actif uniquement pour le processus en cours."
     if sys.platform != "win32":
         return ("Jeton actif pour cette session. Pour le rendre permanent, "
                 'ajoute TT_REFRESH="…" à ton profil shell.')

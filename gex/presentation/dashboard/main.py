@@ -4856,7 +4856,7 @@ def create_app() -> Dash:
                 dummy_val
             )
 
-        tt_auth.save_credentials(cid, sec, ref)
+        tt_auth.save_credentials(cid, sec, ref, persist=False)
 
         if trig == "tt-modal-save-connect-btn":
             if ref:
