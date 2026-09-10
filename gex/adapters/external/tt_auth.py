@@ -246,14 +246,14 @@ def store_refresh(token: str) -> str:
 def exchange_code(client_id: str, secret: str, code: str) -> dict:
     resp = requests.post(
         TOKEN_URL,
-        json={
+        data={
             "grant_type": "authorization_code",
             "code": code,
             "client_id": client_id,
             "client_secret": secret,
             "redirect_uri": redirect_uri(),
         },
-        headers={"User-Agent": "gex-dashboard/1.0", "Content-Type": "application/json"},
+        headers={"User-Agent": "gex-dashboard/1.0"},
         timeout=30,
     )
     if resp.status_code != 200:
