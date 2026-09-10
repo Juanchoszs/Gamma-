@@ -221,7 +221,17 @@ def _quote_token_uncached() -> tuple[str, str, str]:
         headers={"User-Agent": "gex-dashboard/1.0", "Content-Type": "application/json"},
         timeout=30,
     )
-    r.raise_for_status()
+    if not r.ok:
+        try:
+            error = r.json()
+        except ValueError:
+            error = {"body": r.text[:200]}
+        detail = (error.get("error_code") or error.get("error")
+                  or error.get("error_description") or error.get("body", "unknown error"))
+        raise requests.HTTPError(
+            f"Tastytrade OAuth rejected refresh token ({r.status_code}): {detail}",
+            response=r,
+        )
     access = r.json()["access_token"]
     q = requests.get(
         QUOTE_TOKEN_URL,
