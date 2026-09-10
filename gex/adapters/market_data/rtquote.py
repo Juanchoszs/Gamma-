@@ -213,13 +213,12 @@ def _quote_token_uncached() -> tuple[str, str, str]:
 
     r = requests.post(
         TOKEN_URL,
-        data={
+        json={
             "grant_type": "refresh_token",
             "refresh_token": _env("TT_REFRESH"),
-            "client_id": _env("TASTYTRADE_CLIENT_ID"),
             "client_secret": _env("TASTYTRADE_CLIENT_SECRET"),
         },
-        headers={"User-Agent": "gex-dashboard/1.0"},
+        headers={"User-Agent": "gex-dashboard/1.0", "Content-Type": "application/json"},
         timeout=30,
     )
     r.raise_for_status()
