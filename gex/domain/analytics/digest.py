@@ -53,12 +53,12 @@ VIX_IMPACT = 20.0         # au-dessus : force au moins l'orange (VIX vraiment é
 # reste. « élevé » commence vraiment vers 20 (au-dessus de la moyenne long
 # terme) ; 16 (= VIX_SEUIL) n'est que la « fin du confort », pas « élevé ».
 VIX_GRADES = (
-    (12.0, "Complaisance", "😴"),
-    (16.0, "Calme", "🟢"),
-    (20.0, "Normal-haut", "🟡"),
-    (25.0, "Élevé", "🟠"),
-    (35.0, "Stress", "🔴"),
-    (float("inf"), "Panique", "🚨"),
+    (12.0, "Complaisance", ""),
+    (16.0, "Calme", ""),
+    (20.0, "Normal-haut", ""),
+    (25.0, "Élevé", ""),
+    (35.0, "Stress", ""),
+    (float("inf"), "Panique", ""),
 )
 FORT_PERCENTILE = 0.67    # |net_gex| dans le tiers supérieur de son historique
 FORT_MIN_HISTORY = 20     # sans assez d'historique, pas de « Fort » deviné
@@ -404,15 +404,15 @@ def _close_message(etats: dict[str, dict]) -> str:
         v = "est" if len(ampli) == 1 else "sont"
         amp = _join_syms(ampli)
         amp = amp[:1].upper() + amp[1:]          # 1re lettre seulement (garder « ES »)
-        warn = (f"⚠️ {amp} {v} en régime **amplificateur de mouvement** — ça "
+        warn = (f"{amp} {v} en régime **amplificateur de mouvement** — ça "
                 f"risque de mal se passer.")
         milieu = f"{milieu} {warn}" if milieu else warn
     if not milieu:
         milieu = "Positionnement des Market Makers indéterminé (pas de données NQ/ES)."
 
-    return ("🔒 Stop le trading contrarien si tu n'es pas en position ; si tu es en "
+    return ("Stop le trading contrarien si tu n'es pas en position ; si tu es en "
             "position, sors dès que tu peux. " + milieu +
-            " Verrouille ton trading et va profiter de ta soirée. 🌙")
+            " Verrouille ton trading et va profiter de ta soiree.")
 
 
 def _verdict_vert(etats: dict[str, dict]) -> str:

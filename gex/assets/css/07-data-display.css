@@ -1,0 +1,596 @@
+/* 07-data-display.css — Data display language.
+   Price, GEX, DEX, volume, OI, IV, delta, timestamps, status, metadata.
+   Data is protagonist. DATA > CHART > CONTAINER > DECORATION. */
+
+/* ---- Price Display ---- */
+.price {
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.price--primary {
+  font-size: var(--text-2xl);
+  color: var(--color-text-primary);
+}
+
+.price--secondary {
+  font-size: var(--text-lg);
+  color: var(--color-text-secondary);
+}
+
+.price--spot {
+  color: var(--color-text-primary);
+}
+
+.price--call {
+  color: var(--market-call);
+}
+
+.price--put {
+  color: var(--market-put);
+}
+
+.price-change {
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.price-change--positive {
+  color: var(--color-positive);
+}
+
+.price-change--negative {
+  color: var(--color-negative);
+}
+
+/* ---- GEX Display ---- */
+.gex-value {
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.gex-value--positive {
+  color: var(--market-gex-positive);
+}
+
+.gex-value--negative {
+  color: var(--market-gex-negative);
+}
+
+.gex-value--neutral {
+  color: var(--color-text-secondary);
+}
+
+.gex-unit {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  margin-left: var(--space-1);
+}
+
+/* ---- DEX Display ---- */
+.dex-value {
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.dex-value--long {
+  color: var(--market-call);
+}
+
+.dex-value--short {
+  color: var(--market-put);
+}
+
+/* ---- Volume / Open Interest ---- */
+.volume, .oi {
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+.volume--calls {
+  color: var(--market-call);
+}
+
+.volume--puts {
+  color: var(--market-put);
+}
+
+.volume--total {
+  color: var(--color-text-primary);
+}
+
+.oi-value {
+  color: var(--color-text-secondary);
+}
+
+/* ---- IV Display ---- */
+.iv-value {
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  color: var(--market-iv);
+}
+
+.iv-label {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-muted);
+}
+
+/* ---- Delta / Gamma ---- */
+.greek-value {
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+.greek-delta {
+  color: var(--market-delta);
+}
+
+.greek-gamma {
+  color: var(--color-info);
+}
+
+.greek-vega {
+  color: var(--market-iv);
+}
+
+.greek-theta {
+  color: var(--color-warning);
+}
+
+/* ---- Timestamp ---- */
+.timestamp {
+  font-family: var(--font-data);
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.timestamp--live {
+  color: var(--color-success);
+}
+
+.timestamp--stale {
+  color: var(--color-warning);
+}
+
+.timestamp--delayed {
+  color: var(--color-text-muted);
+}
+
+/* ---- Data Table (Unified for Tape, Whale Tracker, GEX Levels) ---- */
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+  font-family: var(--font-data);
+}
+
+.data-table__header {
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-muted);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface-1);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.data-table__header:first-child {
+  border-radius: var(--radius-sm) 0 0 0;
+}
+
+.data-table__header:last-child {
+  border-radius: 0 var(--radius-sm) 0 0;
+}
+
+.data-table__row {
+  background: var(--color-surface-1);
+  /* No hover - dense table rows are static */
+}
+
+.data-table__cell {
+  padding: var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+  white-space: nowrap;
+}
+
+.data-table__numeric {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.data-table__muted {
+  color: var(--color-text-muted);
+}
+
+.data-table__positive {
+  color: var(--color-positive);
+}
+
+.data-table__negative {
+  color: var(--color-negative);
+}
+
+.data-table__warning {
+  color: var(--color-warning);
+}
+
+.data-table__info {
+  color: var(--color-info);
+}
+
+/* ---- Tape Table (extends data-table) ---- */
+.tape-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+  font-family: var(--font-data);
+}
+
+.tape-table th {
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  color: var(--color-text-muted);
+  font-weight: 700;
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--color-border);
+  position: sticky;
+  top: 0;
+  background: var(--color-surface-1);
+}
+
+.tape-td {
+  padding: var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+  white-space: nowrap;
+}
+
+.tape-mono {
+  font-variant-numeric: tabular-nums;
+}
+
+.tape-num {
+  text-align: right;
+}
+
+/* No hover - dense table rows are static */
+
+.tape-buy {
+  color: var(--color-positive);
+}
+
+.tape-sell {
+  color: var(--color-negative);
+}
+
+.tape-combo {
+  color: var(--color-text-muted);
+}
+
+/* ---- Whale Tracker Table ---- */
+.whale-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-family: var(--font-data);
+  font-size: var(--text-sm);
+  margin-top: var(--space-3);
+}
+
+.whale-th {
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-muted);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface-1);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.whale-th:first-child {
+  border-radius: var(--radius-sm) 0 0 0;
+}
+
+.whale-th:last-child {
+  border-radius: 0 var(--radius-sm) 0 0;
+}
+
+.whale-td {
+  padding: var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+  white-space: nowrap;
+}
+
+.whale-mono {
+  font-family: var(--font-data);
+}
+
+.whale-num {
+  text-align: right;
+}
+
+.whale-row {
+  background: var(--color-surface-1);
+  /* No hover - dense table rows are static */
+}
+
+.whale-large {
+  background: rgba(var(--color-positive-rgb), 0.04);
+}
+
+.whale-mega {
+  background: rgba(var(--color-warning-rgb), 0.06);
+}
+
+/* ---- GEX Levels Table ---- */
+.levels-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0 var(--space-1);
+  font-family: var(--font-data);
+  font-size: var(--text-sm);
+  margin-top: var(--space-3);
+}
+
+.lvl-th {
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-muted);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface-1);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.lvl-th:first-child {
+  border-radius: var(--radius-sm) 0 0 0;
+}
+
+.lvl-th:last-child {
+  border-radius: 0 var(--radius-sm) 0 0;
+}
+
+.lvl-td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+  white-space: nowrap;
+}
+
+.lvl-mono {
+  font-family: var(--font-data);
+}
+
+.lvl-num {
+  text-align: right;
+}
+
+.lvl-row {
+  background: var(--color-surface-1);
+  /* No hover - dense table rows are static */
+}
+
+/* ---- GEX Levels: Semantic Differentiation ---- */
+.lvl-type-call {
+  font-weight: 600;
+  color: var(--market-call);
+}
+
+.lvl-type-put {
+  font-weight: 600;
+  color: var(--market-put);
+}
+
+.lvl-type-flip {
+  color: var(--market-flip);
+  font-weight: 600;
+}
+
+.lvl-type-hvl {
+  color: var(--market-hvl);
+  font-weight: 600;
+}
+
+.lvl-type-call-wall {
+  color: var(--market-call-wall);
+  font-weight: 600;
+}
+
+.lvl-type-put-wall {
+  color: var(--market-put-wall);
+  font-weight: 600;
+}
+
+.lvl-type-spot {
+  color: var(--market-spot);
+  font-weight: 700;
+}
+
+.lvl-strongest {
+  font-weight: 700;
+}
+
+/* ---- Analytics Tables ---- */
+.analytics-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0 var(--space-1);
+  font-family: var(--font-data);
+  font-size: var(--text-sm);
+}
+
+.analytics-th {
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-muted);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface-1);
+  position: sticky;
+  top: 0;
+}
+
+.analytics-td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+  white-space: nowrap;
+}
+
+.analytics-row {
+  background: var(--color-surface-1);
+  /* No hover - dense table rows are static */
+}
+
+/* ---- Metadata / Info Rows ---- */
+.meta-row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--color-border-subtle);
+  font-size: var(--text-sm);
+}
+
+.meta-row:last-child {
+  border-bottom: none;
+}
+
+.meta-label {
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+.meta-value {
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-primary);
+  text-align: right;
+  min-width: 120px;
+}
+
+/* ---- Status Badges for Data ---- */
+.data-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+}
+
+.data-status--live {
+  background: rgba(var(--color-positive-rgb), 0.12);
+  color: var(--color-success);
+  border: 1px solid rgba(var(--color-positive-rgb), 0.3);
+}
+
+.data-status--recent {
+  background: rgba(var(--color-info-rgb), 0.12);
+  color: var(--color-info);
+  border: 1px solid rgba(var(--color-info-rgb), 0.3);
+}
+
+.data-status--stale {
+  background: rgba(var(--color-warning-rgb), 0.12);
+  color: var(--color-warning);
+  border: 1px solid rgba(var(--color-warning-rgb), 0.3);
+}
+
+.data-status--missing {
+  background: var(--color-surface-2);
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border);
+}
+
+.data-status--invalid {
+  background: rgba(var(--color-negative-rgb), 0.12);
+  color: var(--color-negative);
+  border: 1px solid rgba(var(--color-negative-rgb), 0.3);
+}
+
+.data-status--degraded {
+  background: rgba(var(--color-warning-rgb), 0.15);
+  color: var(--color-warning);
+  border: 1px solid rgba(var(--color-warning-rgb), 0.4);
+}
+
+.data-status--disconnected {
+  background: rgba(var(--color-negative-rgb), 0.12);
+  color: var(--color-negative);
+  border: 1px solid rgba(var(--color-negative-rgb), 0.3);
+}
+
+/* ---- Whale Status Card ---- */
+.whale-status-card {
+  display: inline-flex;
+  align-items: center;
+  background: var(--color-surface-1);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-4);
+  font-size: var(--text-sm);
+  font-family: var(--font-data);
+  box-shadow: var(--shadow-sm);
+}
+
+/* ---- Analytics Bar (segmented control container) ---- */
+.analytics-bar {
+  margin-bottom: var(--space-4);
+  padding: var(--space-1);
+  background: var(--color-surface-2);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+}
+
+.analytics-seg .seg-btn {
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+/* ---- Volume Profile / Heatmap Cards ---- */
+.heat-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.heat-cards .stat {
+  background: var(--color-surface-1);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-4);
+  box-shadow: var(--shadow-sm);
+}
+

@@ -1,0 +1,207 @@
+/* 10-positioning.css — Positioning tab.
+   Reuses primitives. No duplicate components. */
+
+/* ---- Position Cards (metric grid) ---- */
+.pos-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+/* ---- Position Bar (sub-tab selector) ---- */
+.pos-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.pos-seg {
+  border-radius: var(--radius-md);
+  display: inline-flex;
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  padding: var(--space-1);
+  gap: var(--space-1);
+}
+
+.pos-seg label {
+  font-size: var(--text-sm);
+  padding: var(--space-2) var(--space-4);
+  font-weight: 500;
+  color: var(--color-text-muted);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  white-space: nowrap;
+}
+
+.pos-seg label:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text-primary);
+}
+
+.pos-seg label:has(input:checked),
+.pos-seg .seg-btn.active {
+  background: var(--color-surface-1);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border-strong);
+  font-weight: 600;
+  box-shadow: none;
+}
+
+/* ---- Position Panes ---- */
+#pos-dist-pane,
+#pos-delta-pane,
+#pos-hist-pane {
+  animation: fadeIn var(--transition-normal) ease-in-out;
+}
+
+/* ---- Position Hint ---- */
+#pos-hint {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  line-height: 1.5;
+  margin-bottom: var(--space-3);
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--color-border);
+}
+
+/* ---- Position Distribution Chart ---- */
+#pos-dist-graph {
+  width: 100%;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--color-surface-1);
+}
+
+/* ---- OI Change Chart ---- */
+#oi-change {
+  width: 100%;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--color-surface-1);
+}
+
+/* ---- Position Historical Charts ---- */
+#pos-hist-graph {
+  width: 100%;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--color-surface-1);
+}
+
+/* ---- Position Cards (stat cards in positioning) ---- */
+.pos-cards .stat {
+  background: var(--color-surface-1);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4) var(--space-5);
+  box-shadow: var(--shadow-sm);
+}
+
+.pos-cards .stat:hover {
+  border-color: var(--color-border-strong);
+  transform: translateY(-1px);
+}
+
+.pos-cards .stat-label {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.pos-cards .stat-value {
+  font-family: var(--font-data);
+  font-size: var(--text-2xl);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: var(--space-1) 0 var(--space-2);
+  line-height: 1.1;
+  color: var(--color-text-primary);
+}
+
+.pos-cards .stat-sub {
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+}
+
+/* ---- Position Historical Walls Title ---- */
+.pos-hist-walls-title {
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin-bottom: var(--space-3);
+}
+
+/* ---- Position Historical PCR Title ---- */
+.pos-hist-pcr-title {
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin-top: var(--space-5);
+  margin-bottom: var(--space-3);
+}
+
+/* ---- Position Empty State ---- */
+.pos-empty {
+  text-align: center;
+  padding: var(--space-9) var(--space-6);
+  font-size: var(--text-base);
+  color: var(--color-text-secondary);
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-md);
+  margin: var(--space-5) 0;
+  background: var(--color-surface-1);
+}
+
+.pos-empty-title {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin-bottom: var(--space-2);
+}
+
+.pos-empty-desc {
+  color: var(--color-text-muted);
+  line-height: 1.6;
+}
+
+/* ---- Max Pain Label ---- */
+.pos-max-pain-label {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+/* ---- PCR Sentiment ---- */
+.pos-sentiment-bullish {
+  color: var(--color-positive);
+  font-weight: 600;
+}
+
+.pos-sentiment-bearish {
+  color: var(--color-negative);
+  font-weight: 600;
+}
+
+.pos-sentiment-neutral {
+  color: var(--color-text-secondary);
+  font-weight: 600;
+}
+
+/* ---- Weekend Note ---- */
+.pos-delta-weekend-note {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  font-style: italic;
+  margin-top: var(--space-3);
+}

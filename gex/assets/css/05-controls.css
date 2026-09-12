@@ -1,0 +1,402 @@
+/* 05-controls.css — Buttons, dropdowns, segmented controls, checkboxes, symbol picker.
+   Unifies control geometry across the application.
+   Interactive states communicate via clear surface/border contrast, not glows. */
+
+/* ---- Unified Control Base ---- */
+.btn,
+.seg-btn,
+.ctl-select,
+.symbol-input {
+  font-family: var(--font-ui);
+  font-size: var(--text-base);
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+  transition: background-color var(--transition-fast),
+              border-color var(--transition-fast),
+              color var(--transition-fast);
+}
+
+/* ---- Standard Buttons ---- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+  padding: 0 var(--space-3);
+  background-color: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-primary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.btn:hover {
+  background-color: var(--color-surface-3);
+  border-color: var(--color-border-strong);
+  color: var(--color-text-primary);
+}
+
+.btn:active {
+  background-color: var(--color-surface-1);
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: 1px;
+}
+
+.btn-primary {
+  background-color: var(--color-surface-3);
+  border-color: var(--color-border-strong);
+  color: var(--color-text-primary);
+}
+
+.btn-primary:hover {
+  background-color: var(--color-surface-3);
+  border-color: var(--color-text-muted);
+}
+
+.btn-sm {
+  height: 26px;
+  padding: 0 var(--space-2);
+  font-size: var(--text-sm);
+}
+
+.btn-icon {
+  width: 32px;
+  padding: 0;
+}
+
+/* ---- Segmented Controls (Dash RadioItems with className="seg") ---- */
+.seg,
+.seg-control,
+.ctl-segmented {
+  display: inline-flex;
+  align-items: center;
+  background-color: var(--color-surface-1);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 2px;
+  gap: 2px;
+}
+
+.seg label,
+.seg-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  padding: 0 var(--space-3);
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  white-space: nowrap;
+  transition: color var(--transition-fast), background-color var(--transition-fast);
+}
+
+.seg label:hover,
+.seg-btn:hover {
+  color: var(--color-text-primary);
+}
+
+.seg input[type="radio"],
+.seg input[type="checkbox"] {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+  width: 0;
+  height: 0;
+}
+
+.seg label:has(input:checked),
+.seg-btn.active,
+.seg-btn[data-state="active"] {
+  background-color: var(--color-surface-2);
+  border-color: var(--color-border-strong);
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+
+/* Heatmap segmented control variant */
+.heat-seg {
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
+  gap: var(--space-1) !important;
+}
+
+.heat-seg label {
+  background: var(--color-surface-2) !important;
+  border: 1px solid var(--color-border) !important;
+  color: var(--color-text-muted) !important;
+  border-radius: var(--radius-sm) !important;
+  padding: var(--space-1) var(--space-3) !important;
+  font-size: var(--text-sm) !important;
+  font-weight: 600 !important;
+  height: auto !important;
+}
+
+.heat-seg label:hover {
+  background: var(--color-surface-hover) !important;
+  color: var(--color-text-primary) !important;
+  border-color: var(--color-border-strong) !important;
+}
+
+.heat-seg label:has(input:checked) {
+  background: var(--color-surface-1) !important;
+  color: var(--color-text-primary) !important;
+  border: 1px solid var(--color-border-strong) !important;
+  box-shadow: none !important;
+}
+
+/* ---- Checkboxes & Radio (Dash Checklist with className="check") ---- */
+.check,
+.check-label,
+.ctl-check-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--color-text-primary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.check label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  transition: color var(--transition-fast), background-color var(--transition-fast);
+  white-space: nowrap;
+}
+
+.check label:hover {
+  color: var(--color-text-primary);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.check input[type="checkbox"] {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  background-color: var(--color-surface-1);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  position: relative;
+  flex-shrink: 0;
+  transition: background-color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.check input[type="checkbox"]:checked {
+  background-color: var(--color-info);
+  border-color: var(--color-info);
+}
+
+.check input[type="checkbox"]:checked::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 4px;
+  height: 8px;
+  border: solid var(--color-bg);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.check input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: 2px;
+}
+
+/* Standalone checkbox (Major Walls) */
+.check input[type="checkbox"]:only-child + span::before,
+.check label::before {
+  /* This handles the legacy check pattern */
+}
+
+/* ---- Dropdowns / Selects ---- */
+.ctl-select,
+.Select-control {
+  height: 32px;
+  background-color: var(--color-surface-1) !important;
+  border: 1px solid var(--color-border) !important;
+  border-radius: var(--radius-sm) !important;
+  color: var(--color-text-primary) !important;
+  padding: 0 var(--space-2);
+}
+
+.ctl-select:hover,
+.Select-control:hover {
+  border-color: var(--color-border-strong) !important;
+}
+
+/* ---- Dash dcc.Dropdown Custom Restyling ---- */
+.dash-dropdown .Select-control {
+  background-color: var(--color-surface-1) !important;
+  border-color: var(--color-border) !important;
+  color: var(--color-text-primary) !important;
+}
+
+.dash-dropdown .Select-menu-outer {
+  background-color: var(--color-surface-2) !important;
+  border: 1px solid var(--color-border-strong) !important;
+  border-radius: var(--radius-sm) !important;
+  box-shadow: var(--shadow-md) !important;
+}
+
+.dash-dropdown .Select-option {
+  background-color: transparent !important;
+  color: var(--color-text-primary) !important;
+  padding: var(--space-2) var(--space-3) !important;
+}
+
+.dash-dropdown .Select-option:hover,
+.dash-dropdown .Select-option.is-focused {
+  background-color: var(--color-surface-3) !important;
+  color: var(--color-text-primary) !important;
+}
+
+.dash-dropdown .Select-option.is-selected {
+  background-color: var(--color-surface-3) !important;
+  color: var(--color-info) !important;
+  font-weight: 600;
+}
+
+.dash-dropdown .Select-value-label {
+  color: var(--color-text-primary) !important;
+}
+
+.dash-dropdown .Select-placeholder {
+  color: var(--color-text-muted) !important;
+}
+
+.dash-dropdown .Select-arrow {
+  border-color: var(--color-text-muted) transparent transparent !important;
+}
+
+/* ---- Symbol Picker (Dash Dropdown) ---- */
+.symbol-picker {
+  width: 210px;
+  min-width: 180px;
+}
+
+.symbol-picker .Select-control {
+  background-color: var(--color-surface-1) !important;
+  border-color: var(--color-border) !important;
+  border-radius: var(--radius-sm) !important;
+  min-height: 36px !important;
+  color: var(--color-text-primary) !important;
+}
+
+.symbol-picker .Select-value-label,
+.symbol-picker .Select-placeholder {
+  color: var(--color-text-primary) !important;
+  font-size: var(--text-md) !important;
+}
+
+.symbol-picker .Select-menu-outer {
+  background-color: var(--color-surface-2) !important;
+  border-color: var(--color-border-strong) !important;
+  border-radius: var(--radius-sm) !important;
+  box-shadow: var(--shadow-md) !important;
+}
+
+.symbol-picker .Select-option {
+  background-color: transparent !important;
+  color: var(--color-text-secondary) !important;
+  padding: var(--space-2) var(--space-3) !important;
+}
+
+.symbol-picker .Select-option:hover,
+.symbol-picker .Select-option.is-focused {
+  background-color: var(--color-surface-3) !important;
+  color: var(--color-text-primary) !important;
+}
+
+.symbol-picker .Select-option.is-selected {
+  background-color: var(--color-surface-3) !important;
+  color: var(--color-info) !important;
+  font-weight: 600;
+}
+
+.symbol-picker .Select-arrow {
+  border-color: var(--color-text-muted) transparent transparent !important;
+}
+
+.symbol-picker-container {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.symbol-input {
+  height: 32px;
+  padding: 0 var(--space-3);
+  background-color: var(--color-surface-1);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-primary);
+  font-family: var(--font-data);
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.symbol-input:focus {
+  border-color: var(--color-border-focus);
+  outline: none;
+}
+
+/* Unit RadioItems (Index/Futures) */
+.unit-seg {
+  display: inline-flex;
+  align-items: center;
+  background-color: var(--color-surface-1);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 2px;
+  gap: 2px;
+}
+
+.unit-seg label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  padding: 0 var(--space-3);
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  white-space: nowrap;
+  transition: color var(--transition-fast), background-color var(--transition-fast);
+}
+
+.unit-seg label:hover {
+  color: var(--color-text-primary);
+}
+
+.unit-seg input[type="radio"] {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+  width: 0;
+  height: 0;
+}
+
+.unit-seg label:has(input:checked) {
+  background-color: var(--color-surface-2);
+  border-color: var(--color-border-strong);
+  color: var(--color-text-primary);
+  font-weight: 600;
+}

@@ -3340,7 +3340,6 @@ def create_app() -> Dash:
                            target="_blank", children="FAQ"),
                     # Bouton modal API Tastytrade
                     html.Button([
-                        html.Span("🔑", style={"marginRight": "4px"}),
                         html.Span(id="tt-btn-text", children="API Tastytrade"),
                     ], id="tt-modal-open-btn", className="btn-tt-api", n_clicks=0,
                        title="Configurar credenciales API Tastytrade"),
@@ -3520,11 +3519,11 @@ def create_app() -> Dash:
                     dcc.RadioItems(
                         id="heat-sub", className="seg heat-seg",
                         options=[
-                            {"label": "🔥 Matriz Intradiaria (Tiempo)", "value": "intraday"},
-                            {"label": "🫧 Burbujas de Contratos (Flow)", "value": "bubbles"},
-                            {"label": "🗓️ Estructura Temporal (Vencimientos)", "value": "term"},
-                            {"label": "🏛️ Histórico Multi-Día (GEX & Muros)", "value": "hist"},
-                            {"label": "📊 Perfil GEX & Precio", "value": "overlay"},
+                            {"label": "Matriz Intradiaria (Tiempo)", "value": "intraday"},
+                            {"label": "Burbujas de Contratos (Flow)", "value": "bubbles"},
+                            {"label": "Estructura Temporal (Vencimientos)", "value": "term"},
+                            {"label": "Historico Multi-Dia (GEX & Muros)", "value": "hist"},
+                            {"label": "Perfil GEX & Precio", "value": "overlay"},
                         ],
                         value="intraday", inline=True,
                     ),
@@ -3612,9 +3611,9 @@ def create_app() -> Dash:
                     dcc.RadioItems(
                         id="pos-sub", className="seg pos-seg",
                         options=[
-                            {"label": "📊 Distribución OI", "value": "dist"},
-                            {"label": "📈 Variación Diaria (ΔOI)", "value": "delta"},
-                            {"label": "🏛️ Histórico (Walls & PCR)", "value": "hist"},
+                            {"label": "Distribucion OI", "value": "dist"},
+                            {"label": "Variacion Diaria (ΔOI)", "value": "delta"},
+                            {"label": "Historico (Walls & PCR)", "value": "hist"},
                         ],
                         value="dist", inline=True,
                     ),
@@ -3653,10 +3652,10 @@ def create_app() -> Dash:
                     dcc.RadioItems(
                         id="analytics-sub", className="seg analytics-seg",
                         options=[
-                            {"label": "📊 Volatility", "value": "vol"},
-                            {"label": "🐋 Whale Tracker", "value": "whale"},
-                            {"label": "📅 By Expiry", "value": "expiry"},
-                            {"label": "📋 GEX Levels", "value": "levels"},
+                            {"label": "Volatility", "value": "vol"},
+                            {"label": "Whale Tracker", "value": "whale"},
+                            {"label": "By Expiry", "value": "expiry"},
+                            {"label": "GEX Levels", "value": "levels"},
                         ],
                         value="vol", inline=True,
                     ),
@@ -3715,7 +3714,7 @@ def create_app() -> Dash:
                         html.Span(id="cfd-modal-fut-label", className="cfd-calc-label"),
                         html.Div(id="cfd-modal-fut-spot", className="cfd-calc-static-val"),
                     ], className="cfd-calc-row"),
-                    html.Button("🔄 Obtener desde Yahoo Finance", id="cfd-modal-yahoo-btn", className="btn",
+                    html.Button("Obtener desde Yahoo Finance", id="cfd-modal-yahoo-btn", className="btn",
                                 style={"margin": "2px 0 6px 0", "background": "rgba(46, 204, 113, 0.15)", "color": "var(--ok)", "border": "1px solid rgba(46, 204, 113, 0.35)", "fontWeight": "600", "fontSize": "13px"}),
                     html.Div([
                         html.Span(id="cfd-modal-cfd-label", className="cfd-calc-label"),
@@ -3748,7 +3747,6 @@ def create_app() -> Dash:
                 html.Div([
                     html.Div([
                         html.H3([
-                            html.Span("⚡", style={"color": "#38bdf8", "marginRight": "8px"}),
                             html.Span(id="tt-modal-title", children="Configuración API Tastytrade (Tiempo Real)"),
                         ], className="tt-modal-title"),
                         html.Button("✕", id="tt-modal-close-icon", className="cfd-btn", style={"fontSize": "14px"}, n_clicks=0),
@@ -3823,12 +3821,12 @@ def create_app() -> Dash:
                     # Modal Action buttons
                     html.Div([
                         html.Div([
-                            html.Button(id="tt-modal-disconnect-btn", className="tt-btn-danger", children="🗑 Desconectar", n_clicks=0),
+                            html.Button(id="tt-modal-disconnect-btn", className="tt-btn-danger", children="Desconectar", n_clicks=0),
                         ]),
                         html.Div([
                             html.Button(id="tt-modal-close-btn", className="tt-btn-secondary", children="Cerrar", style={"marginRight": "8px"}, n_clicks=0),
-                            html.Button(id="tt-modal-save-btn", className="tt-btn-secondary", children="💾 Solo Guardar", style={"marginRight": "8px"}, n_clicks=0),
-                            html.Button(id="tt-modal-save-connect-btn", className="tt-btn-primary", children="⚡ Guardar y Conectar", n_clicks=0),
+                            html.Button(id="tt-modal-save-btn", className="tt-btn-secondary", children="Solo Guardar", style={"marginRight": "8px"}, n_clicks=0),
+                            html.Button(id="tt-modal-save-connect-btn", className="tt-btn-primary", children="Guardar y Conectar", n_clicks=0),
                         ], style={"display": "flex", "alignItems": "center"}),
                     ], className="tt-modal-actions"),
                 ], className="tt-modal-card"),

@@ -1,0 +1,56 @@
+/* 02-base.css — Consolidated base element styles.
+   html, body, anchors, buttons, inputs, typography base, numeric defaults.
+   Currently scattered across 3+ locations in style.css; unified here. */
+
+body {
+  background: var(--color-bg);
+  color: var(--color-text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--text-base);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Tabular figures for all numeric data — financial values must align */
+.stat-value,
+.chip,
+.tape-mono,
+.whale-mono,
+.lvl-mono,
+.cfd-input,
+.cfd-calc-static-val,
+.cfd-calc-field,
+.cfd-calc-result-val,
+.pc-gauge-labels {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Base anchor styling */
+a {
+  color: var(--color-info);
+  transition: color var(--transition-fast);
+}
+
+a:hover {
+  color: var(--color-text-primary);
+}
+
+/* Scrollbar styling — minimal, dark */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-border-strong);
+}

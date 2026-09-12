@@ -1,0 +1,669 @@
+/* 13-responsive.css — Consolidated breakpoints.
+   Desktop first. Mobile doesn't break.
+   Breakpoints: 1440, 1280, 1024, 768, 480 */
+
+/* ============================================================
+   1440px — Large Desktop
+   ============================================================ */
+@media (max-width: 1440px) {
+  .app-shell {
+    padding: 0 var(--space-6) var(--space-8);
+  }
+
+  .page {
+    padding: 0 var(--space-6) var(--space-6);
+  }
+
+  .topbar {
+    padding: var(--space-3) var(--space-6) 0;
+  }
+
+  .topbar-row,
+  .toolbar {
+    max-width: 1440px;
+  }
+
+  .workspace-hero {
+    margin: var(--space-5) 0 var(--space-4);
+    padding: var(--space-5) var(--space-6) var(--space-4);
+  }
+
+  .symbol-picker {
+    width: 200px;
+    min-width: 180px;
+  }
+}
+
+/* ============================================================
+   1280px — Standard Desktop
+   ============================================================ */
+@media (max-width: 1280px) {
+  .app-shell {
+    padding: 0 var(--space-5) var(--space-7);
+  }
+
+  .page {
+    padding: 0 var(--space-5) var(--space-5);
+  }
+
+  .topbar {
+    padding: var(--space-3) var(--space-5) 0;
+  }
+
+  .topbar-row,
+  .toolbar {
+    max-width: 1280px;
+  }
+
+  .workspace-hero {
+    margin: var(--space-5) 0 var(--space-4);
+    padding: var(--space-5) var(--space-5) var(--space-4);
+  }
+
+  .workspace-copy h1 {
+    font-size: clamp(20px, 2.5vw, 28px);
+  }
+
+  .symbol-picker {
+    width: 180px;
+    min-width: 160px;
+  }
+
+  .row > * {
+    min-width: 300px;
+  }
+
+  .stat {
+    min-width: 130px;
+  }
+
+  .heat-cards {
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  }
+
+  .pos-cards {
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  }
+}
+
+/* ============================================================
+   1024px — Tablet Landscape / Small Desktop
+   ============================================================ */
+@media (max-width: 1024px) {
+  .app-shell {
+    padding: 0 var(--space-4) var(--space-6);
+  }
+
+  .page {
+    padding: 0 var(--space-4) var(--space-4);
+  }
+
+  .topbar {
+    padding: var(--space-2) var(--space-4) 0;
+  }
+
+  .topbar-row,
+  .toolbar {
+    max-width: 1024px;
+  }
+
+  .brand-sub {
+    display: none;
+  }
+
+  .workspace-hero {
+    margin: var(--space-4) 0 var(--space-3);
+    padding: var(--space-4) var(--space-5) var(--space-3);
+  }
+
+  .workspace-copy h1 {
+    font-size: clamp(18px, 2.5vw, 24px);
+  }
+
+  .workspace-status {
+    padding: var(--space-1) var(--space-2);
+    font-size: var(--text-sm);
+  }
+
+  .symbol-picker {
+    width: 160px;
+    min-width: 140px;
+  }
+
+  .toolbar {
+    gap: var(--space-3);
+  }
+
+  .ctl-label {
+    font-size: var(--text-xs);
+  }
+
+  .row {
+    gap: var(--space-3);
+  }
+
+  .row > * {
+    min-width: 280px;
+  }
+
+  .cards {
+    gap: var(--space-3);
+  }
+
+  .stat {
+    min-width: 120px;
+    padding: var(--space-3) var(--space-4);
+  }
+
+  .stat-value {
+    font-size: var(--text-xl);
+  }
+
+  .chips {
+    gap: var(--space-2);
+  }
+
+  .chip {
+    padding: var(--space-1) var(--space-2);
+    font-size: var(--text-xs);
+  }
+
+  .daybar {
+    padding: var(--space-2) var(--space-3);
+  }
+
+  .tab-item {
+    padding: var(--space-2) var(--space-4) !important;
+    font-size: var(--text-sm) !important;
+  }
+
+  .section-head {
+    padding: var(--space-3) 2px var(--space-2);
+  }
+
+  .primary-overlay-chart {
+    border-radius: var(--radius-sm);
+  }
+
+  .heat-bar {
+    padding: var(--space-2) var(--space-3);
+  }
+
+  .heat-seg label {
+    padding: var(--space-1) var(--space-2);
+    font-size: var(--text-xs);
+  }
+
+  #heat-controls-row {
+    padding: var(--space-3) var(--space-4);
+    gap: var(--space-4) var(--space-5);
+  }
+
+  .heat-control-group {
+    padding-right: var(--space-4);
+  }
+
+  .analytics-bar {
+    padding: var(--space-1);
+  }
+
+  .modal-card,
+  .tt-modal-card,
+  .cfd-modal-card,
+  .native-overlay-card {
+    padding: var(--space-5) var(--space-6);
+    margin: var(--space-3);
+    max-width: calc(100% - var(--space-6));
+  }
+}
+
+/* ============================================================
+   768px — Tablet Portrait
+   ============================================================ */
+@media (max-width: 768px) {
+  .app-shell {
+    padding: 0 var(--space-3) var(--space-5);
+  }
+
+  .page {
+    padding: 0 var(--space-3) var(--space-3);
+  }
+
+  .topbar {
+    padding: var(--space-2) var(--space-3) 0;
+  }
+
+  .topbar-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-3);
+  }
+
+  .topbar-actions {
+    justify-content: space-between;
+    flex-wrap: wrap;
+  }
+
+  .brand {
+    justify-content: center;
+  }
+
+  .brand-sub {
+    display: none;
+  }
+
+  .symbol-picker {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-3);
+    padding: var(--space-2) 0 var(--space-2);
+  }
+
+  .ctl {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .ctl-label {
+    font-size: var(--text-xs);
+  }
+
+  .seg,
+  .check {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .seg label,
+  .check label {
+    flex: 1;
+    text-align: center;
+    padding: var(--space-2) var(--space-3);
+  }
+
+  .cfd-control-group {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .workspace-hero {
+    margin: var(--space-3) 0 var(--space-3);
+    padding: var(--space-4) var(--space-4) var(--space-3);
+  }
+
+  .workspace-head {
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .workspace-copy h1 {
+    font-size: clamp(18px, 3.5vw, 22px);
+    text-align: center;
+  }
+
+  .workspace-status {
+    justify-content: center;
+    width: 100%;
+  }
+
+  .workspace-summary {
+    text-align: center;
+  }
+
+  .row {
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .row > * {
+    min-width: 100%;
+    width: 100%;
+  }
+
+  .cards {
+    flex-direction: column;
+  }
+
+  .stat {
+    min-width: 100%;
+    width: 100%;
+  }
+
+  .chips {
+    justify-content: center;
+  }
+
+  .daybar {
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .tabbar {
+    gap: var(--space-1);
+  }
+
+  .tab-item {
+    padding: var(--space-2) var(--space-3) !important;
+    font-size: var(--text-xs) !important;
+  }
+
+  .section-head {
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .section-kicker {
+    font-size: var(--text-xs);
+  }
+
+  .primary-overlay-chart {
+    border-radius: var(--radius-sm);
+  }
+
+  .footer {
+    padding-top: var(--space-3);
+    font-size: var(--text-xs);
+  }
+
+  /* Heatmap */
+  .heat-bar {
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .heat-seg {
+    order: -1;
+    width: 100%;
+    justify-content: center;
+  }
+
+  #heat-controls-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-3);
+  }
+
+  .heat-control-group {
+    border-right: 0;
+    padding-right: 0;
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .heat-control-group .ctl-label {
+    white-space: nowrap;
+  }
+
+  .heat-cards {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  /* Analytics */
+  .analytics-bar {
+    overflow-x: auto;
+  }
+
+  .analytics-seg {
+    min-width: max-content;
+  }
+
+  /* Positioning */
+  .pos-cards {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .pos-bar {
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .pos-seg {
+    width: 100%;
+    justify-content: center;
+  }
+
+  /* Modals */
+  .modal-card,
+  .tt-modal-card,
+  .cfd-modal-card,
+  .native-overlay-card {
+    padding: var(--space-4) var(--space-5);
+    margin: var(--space-2);
+    max-width: calc(100% - var(--space-4));
+  }
+
+  .tt-modal-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .tt-modal-actions > div {
+    display: flex;
+    justify-content: center;
+    width: 100%;
+  }
+
+  .tt-modal-actions .tt-btn-primary,
+  .tt-modal-actions .tt-btn-secondary,
+  .tt-modal-actions .tt-btn-danger {
+    flex: 1;
+    text-align: center;
+  }
+}
+
+/* ============================================================
+   480px — Mobile
+   ============================================================ */
+@media (max-width: 480px) {
+  .app-shell {
+    padding: 0 var(--space-2) var(--space-4);
+  }
+
+  .page {
+    padding: 0 var(--space-2) var(--space-2);
+  }
+
+  .topbar {
+    padding: var(--space-2) var(--space-2) 0;
+  }
+
+  .brand {
+    font-size: var(--text-md);
+  }
+
+  .brand-mark {
+    width: 20px;
+    height: 20px;
+    font-size: var(--text-xs);
+  }
+
+  .symbol-picker .Select-control {
+    min-height: 32px;
+    font-size: var(--text-sm);
+  }
+
+  .workspace-hero {
+    padding: var(--space-3) var(--space-3) var(--space-2);
+  }
+
+  .workspace-copy h1 {
+    font-size: clamp(16px, 4vw, 20px);
+  }
+
+  .workspace-status {
+    font-size: var(--text-xs);
+    padding: var(--space-1) var(--space-2);
+  }
+
+  .workspace-summary {
+    font-size: var(--text-sm);
+  }
+
+  .stat-value {
+    font-size: var(--text-lg);
+  }
+
+  .stat-label {
+    font-size: var(--text-xs);
+  }
+
+  .chips {
+    gap: var(--space-1);
+  }
+
+  .chip {
+    padding: var(--space-1) var(--space-2);
+    font-size: var(--text-xs);
+  }
+
+  .chip b {
+    font-size: var(--text-xs);
+  }
+
+  .chip-meta {
+    display: none;
+  }
+
+  .tab-item {
+    padding: var(--space-2) var(--space-2) !important;
+    font-size: var(--text-xs) !important;
+  }
+
+  .section-head {
+    padding: var(--space-2) 2px var(--space-1);
+  }
+
+  .section-kicker {
+    font-size: 9px;
+  }
+
+  .section-note {
+    font-size: var(--text-xs);
+  }
+
+  .daybar {
+    padding: var(--space-2) var(--space-2);
+    gap: var(--space-2);
+  }
+
+  .btn,
+  .linkbtn {
+    padding: var(--space-1) var(--space-3);
+    font-size: var(--text-sm);
+  }
+
+  .heat-cards {
+    grid-template-columns: 1fr;
+  }
+
+  .pos-cards {
+    grid-template-columns: 1fr;
+  }
+
+  /* Tables - horizontal scroll */
+  .data-table-wrap,
+  .tape-table-wrap,
+  .whale-table-wrap,
+  .levels-table-wrap,
+  .analytics-table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .data-table,
+  .tape-table,
+  .whale-table,
+  .levels-table,
+  .analytics-table {
+    min-width: 600px;
+  }
+
+  /* Modals */
+  .modal-card,
+  .tt-modal-card,
+  .cfd-modal-card,
+  .native-overlay-card {
+    padding: var(--space-3) var(--space-4);
+    margin: var(--space-1);
+    max-width: calc(100% - var(--space-2));
+    border-radius: var(--radius-md);
+  }
+
+  .tt-modal-header h3 {
+    font-size: var(--text-md);
+  }
+
+  .tt-input {
+    padding: var(--space-2) var(--space-2);
+    font-size: var(--text-sm);
+  }
+
+  .cfd-input {
+    width: 70px;
+    font-size: var(--text-sm);
+  }
+
+  .cfd-btn {
+    padding: var(--space-1) var(--space-2);
+    font-size: var(--text-xs);
+  }
+}
+
+/* ============================================================
+   Print Styles
+   ============================================================ */
+@media print {
+  .topbar,
+  .toolbar,
+  .tabbar,
+  .daybar,
+  .heat-bar,
+  .analytics-bar,
+  .pos-bar,
+  .btn,
+  .linkbtn,
+  .rt-badge,
+  .modal-backdrop,
+  .native-banner,
+  .footer {
+    display: none !important;
+  }
+
+  .app-shell,
+  .page {
+    max-width: none;
+    padding: 0;
+  }
+
+  .workspace-hero {
+    border: none;
+    box-shadow: none;
+    background: none;
+    padding: 0;
+    margin: 0 0 var(--space-4);
+  }
+
+  .primary-overlay-chart,
+  .panel {
+    border: 1px solid var(--color-border-strong);
+    box-shadow: none;
+    break-inside: avoid;
+  }
+
+  body {
+    background: white !important;
+    color: black !important;
+  }
+
+.stat,
+  .chip {
+    border: 1px solid var(--color-border);
+    background: white !important;
+    color: black !important;
+  }
+}

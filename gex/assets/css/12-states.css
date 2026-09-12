@@ -1,0 +1,408 @@
+/* 12-states.css — Interactive states & data quality states.
+   Every interactive element: default, hover, active, focus-visible, selected, disabled, loading, error.
+   Real-time/data quality: LIVE, RECENT, STALE, MISSING, INVALID, DEGRADED, DISCONNECTED. */
+
+/* ============================================================
+   INTERACTIVE STATES — Universal for all controls
+   ============================================================ */
+
+/* ---- Focus Visible (accessible focus) ---- */
+*:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: 2px;
+}
+
+/* Buttons */
+.btn:focus-visible,
+.seg-btn:focus-visible,
+.tab-item:focus-visible,
+.check-input:focus-visible,
+.ctl-select:focus-visible,
+.Select-control:focus-visible,
+.symbol-input:focus-visible,
+.linkbtn:focus-visible,
+.cfd-btn:focus-visible,
+.cfd-input:focus-visible,
+.modal-btn-primary:focus-visible,
+.modal-btn-secondary:focus-visible,
+.modal-btn-danger:focus-visible,
+.tt-btn-primary:focus-visible,
+.tt-btn-secondary:focus-visible,
+.tt-btn-danger:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: 2px;
+}
+
+/* Remove default focus ring for mouse users */
+*:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* ---- Disabled State ---- */
+.btn:disabled,
+.btn[disabled],
+.seg-btn:disabled,
+.seg-btn[disabled],
+.ctl-select:disabled,
+.ctl-select[disabled],
+.Select-control[disabled],
+.symbol-input:disabled,
+.symbol-input[disabled],
+.cfd-btn:disabled,
+.cfd-btn[disabled],
+.cfd-input:disabled,
+.cfd-input[disabled],
+.modal-input:disabled,
+.modal-input[disabled],
+.modal-field:disabled,
+.modal-field[disabled],
+.tt-input:disabled,
+.tt-input[disabled] {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* ---- Loading State ---- */
+.btn--loading,
+.seg-btn--loading {
+  position: relative;
+  color: transparent !important;
+  pointer-events: none;
+}
+
+.btn--loading::after,
+.seg-btn--loading::after {
+  content: "";
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  top: 50%;
+  left: 50%;
+  margin: -8px 0 0 -8px;
+  border: 2px solid var(--color-border);
+  border-top-color: var(--color-info);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ---- Error State ---- */
+.input-error,
+  .Select-control--error,
+  .modal-input--error,
+  .modal-field--error,
+  .tt-input--error {
+  border-color: var(--color-negative) !important;
+  box-shadow: 0 0 0 2px rgba(var(--color-negative-rgb), 0.25) !important;
+}
+
+/* ---- Selected/Active State (Segmented Controls) ---- */
+.seg-btn.active,
+.seg-btn[data-state="active"],
+.seg label:has(input:checked),
+.check label:has(input:checked) {
+  background: var(--color-surface-2);
+  border-color: var(--color-border-strong);
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+
+/* ---- Hover States ---- */
+.btn:hover,
+.seg-btn:hover,
+.tab-item:hover,
+.check-label:hover,
+.ctl-select:hover,
+.Select-control:hover,
+.symbol-input:hover,
+.linkbtn:hover,
+.cfd-btn:hover,
+.modal-btn-primary:hover,
+.modal-btn-secondary:hover,
+.modal-btn-danger:hover,
+.tt-btn-primary:hover,
+.tt-btn-secondary:hover,
+.tt-btn-danger:hover {
+  /* Base hover handled in component files */
+}
+
+/* ---- Active/Pressed State ---- */
+.btn:active,
+.seg-btn:active {
+  transform: translateY(1px);
+}
+
+/* ============================================================
+   REAL-TIME / DATA QUALITY STATES
+   ============================================================ */
+
+/* Base status indicator */
+.status-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* LIVE — Real-time active, data fresh */
+.status--live .status-dot,
+.data-status--live .status-dot,
+.rt-connected .rt-dot {
+  background: var(--color-success);
+  box-shadow: 0 0 8px var(--color-success);
+}
+
+.status--live,
+.data-status--live,
+.rt-connected {
+  color: var(--color-text-secondary);
+}
+
+/* RECENT — Data received recently, within threshold */
+.status--recent .status-dot,
+.data-status--recent .status-dot {
+  background: var(--color-info);
+  box-shadow: 0 0 8px var(--color-info);
+}
+
+.status--recent,
+.data-status--recent {
+  color: var(--color-text-secondary);
+}
+
+/* STALE — Data older than threshold but not missing */
+.status--stale .status-dot,
+.data-status--stale .status-dot {
+  background: var(--color-warning);
+  box-shadow: 0 0 8px var(--color-warning);
+}
+
+.status--stale,
+.data-status--stale {
+  color: var(--color-warning);
+}
+
+/* MISSING — No data available */
+.status--missing .status-dot,
+.data-status--missing .status-dot {
+  background: var(--color-text-muted);
+}
+
+.status--missing,
+.data-status--missing {
+  color: var(--color-text-muted);
+}
+
+/* INVALID — Data present but invalid/corrupt */
+.status--invalid .status-dot,
+.data-status--invalid .status-dot {
+  background: var(--color-negative);
+  box-shadow: 0 0 6px var(--color-negative);
+}
+
+.status--invalid,
+.data-status--invalid {
+  color: var(--color-negative);
+}
+
+/* DEGRADED — Partial functionality, fallback active */
+.status--degraded .status-dot,
+.data-status--degraded .status-dot,
+.rt-degraded .rt-dot {
+  background: var(--color-warning);
+  box-shadow: 0 0 8px var(--color-warning);
+}
+
+.status--degraded,
+.data-status--degraded,
+.rt-degraded {
+  color: var(--color-warning);
+}
+
+/* DISCONNECTED — Connection lost */
+.status--disconnected .status-dot,
+.data-status--disconnected .status-dot,
+.rt-disconnected .rt-dot {
+  background: var(--color-negative);
+  box-shadow: 0 0 6px var(--color-negative);
+}
+
+.status--disconnected,
+.data-status--disconnected,
+.rt-disconnected {
+  color: var(--color-negative);
+}
+
+/* Status badge variants (reusable across header, charts, tables, analytics) */
+.data-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+}
+
+.data-status--live {
+  background: rgba(var(--color-positive-rgb), 0.12);
+  color: var(--color-success);
+  border: 1px solid rgba(var(--color-positive-rgb), 0.3);
+}
+
+.data-status--recent {
+  background: rgba(var(--color-info-rgb), 0.12);
+  color: var(--color-info);
+  border: 1px solid rgba(var(--color-info-rgb), 0.3);
+}
+
+.data-status--stale {
+  background: rgba(var(--color-warning-rgb), 0.12);
+  color: var(--color-warning);
+  border: 1px solid rgba(var(--color-warning-rgb), 0.3);
+}
+
+.data-status--missing {
+  background: var(--color-surface-2);
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border);
+}
+
+.data-status--invalid {
+  background: rgba(var(--color-negative-rgb), 0.12);
+  color: var(--color-negative);
+  border: 1px solid rgba(var(--color-negative-rgb), 0.3);
+}
+
+.data-status--degraded {
+  background: rgba(var(--color-warning-rgb), 0.15);
+  color: var(--color-warning);
+  border: 1px solid rgba(var(--color-warning-rgb), 0.4);
+}
+
+.data-status--disconnected {
+  background: rgba(var(--color-negative-rgb), 0.12);
+  color: var(--color-negative);
+  border: 1px solid rgba(var(--color-negative-rgb), 0.3);
+}
+
+/* Real-time badge (header) */
+.rt-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.rt-badge:hover {
+  border-color: var(--color-border-strong);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+
+.rt-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-text-muted);
+  flex: none;
+}
+
+/* ============================================================
+   REDUCED MOTION
+   ============================================================ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .live-pulse {
+    animation: none !important;
+  }
+
+  .page-pane {
+    animation: none !important;
+  }
+
+  .stat:hover,
+  .whale-row:hover,
+  .lvl-row:hover,
+  .analytics-row:hover,
+  .rt-badge:hover,
+  .btn:hover,
+  .seg-btn:hover,
+  .tab-item:hover,
+  .chip:hover,
+  .linkbtn:hover {
+    transform: none !important;
+  }
+}
+
+/* ============================================================
+   LIVE PULSE (if still used) — neutralized
+   ============================================================ */
+.live-pulse {
+  color: var(--color-success);
+  /* text-shadow and animation removed — use .status--live instead */
+}
+
+/* ============================================================
+   EMPTY STATES — Professional, no emojis
+   ============================================================ */
+.empty-state {
+  text-align: center;
+  padding: var(--space-9) var(--space-6);
+  font-size: var(--text-base);
+  color: var(--color-text-secondary);
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-md);
+  margin: var(--space-5) 0;
+  background: var(--color-surface-1);
+}
+
+.empty-state-title {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin-bottom: var(--space-2);
+}
+
+.empty-state-desc {
+  color: var(--color-text-muted);
+  line-height: 1.6;
+}
+
+/* Specific empty states */
+.analytics-empty,
+.whale-empty,
+.levels-empty,
+.pos-empty,
+.tape-empty,
+.heat-empty {
+  composes: empty-state;
+}
