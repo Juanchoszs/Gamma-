@@ -1,0 +1,13 @@
+[[interpreters]]
+[python]
+version = "3.11"
+packageManager = "pip"
+
+[env]
+PORT = "8080"
+HOST = "0.0.0.0"
+
+[[redirects]]
+from = "/*"
+to = "/"
+status = 200

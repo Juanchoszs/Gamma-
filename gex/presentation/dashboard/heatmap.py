@@ -15,9 +15,9 @@ from gex.presentation.i18n.i18n import t
 
 
 COLORS = {
-    "page": "#090d16", "surface": "#101827", "grid": "#243044",
-    "muted": "#94a3b8", "ink": "#e5edf8", "spot": "#f8fafc",
-    "flip": "#fbbf24", "call": "#22d3ee", "put": "#fb7185",
+    "page": "#0b1018", "surface": "#111a25", "grid": "#1a2535",
+    "muted": "#64748b", "ink": "#e2e8f0", "spot": "#ffffff",
+    "flip": "#d4a84b", "call": "#4caf8a", "put": "#e06b7a",
 }
 _SNAPSHOT_CACHE: dict[
     tuple[str, str], tuple[float, list[tuple[datetime, pd.DataFrame]], float]

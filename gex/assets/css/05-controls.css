@@ -16,6 +16,16 @@
               color var(--transition-fast);
 }
 
+/* ---- Generic Dash Input Components ---- */
+.dash-input,
+.dash-checklist input,
+.dash-radioitems input {
+  appearance: none;
+  font-family: var(--font-ui);
+  font-size: var(--text-base);
+  color: var(--color-text-primary);
+}
+
 /* ---- Standard Buttons ---- */
 .btn {
   display: inline-flex;
@@ -166,6 +176,13 @@
   user-select: none;
 }
 
+/* Dash Checklist specific styling */
+.check .dash-checklist {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
 .check label {
   display: inline-flex;
   align-items: center;
@@ -175,6 +192,7 @@
   color: var(--color-text-secondary);
   transition: color var(--transition-fast), background-color var(--transition-fast);
   white-space: nowrap;
+  cursor: pointer;
 }
 
 .check label:hover {
@@ -182,6 +200,7 @@
   background: rgba(255, 255, 255, 0.04);
 }
 
+/* Custom checkbox styling for Dash */
 .check input[type="checkbox"] {
   appearance: none;
   width: 16px;
@@ -193,6 +212,11 @@
   position: relative;
   flex-shrink: 0;
   transition: background-color var(--transition-fast), border-color var(--transition-fast);
+  margin: 0;
+}
+
+.check input[type="checkbox"]:hover {
+  border-color: var(--color-border-strong);
 }
 
 .check input[type="checkbox"]:checked {
@@ -215,6 +239,60 @@
 .check input[type="checkbox"]:focus-visible {
   outline: 2px solid var(--color-border-focus);
   outline-offset: 2px;
+}
+
+/* Dash Checklist internal styling */
+.dash-checklist .dash-input {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  background-color: var(--color-surface-1);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  position: relative;
+  flex-shrink: 0;
+  transition: background-color var(--transition-fast), border-color var(--transition-fast);
+  margin: 0;
+}
+
+.dash-checklist .dash-input:hover {
+  border-color: var(--color-border-strong);
+}
+
+.dash-checklist .dash-input:checked {
+  background-color: var(--color-info);
+  border-color: var(--color-info);
+}
+
+.dash-checklist .dash-input:checked::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 4px;
+  height: 8px;
+  border: solid var(--color-bg);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.dash-checklist label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  transition: color var(--transition-fast), background-color var(--transition-fast);
+  white-space: nowrap;
+  cursor: pointer;
+  font-size: var(--text-sm);
+}
+
+.dash-checklist label:hover {
+  color: var(--color-text-primary);
+  background: rgba(255, 255, 255, 0.04);
 }
 
 /* Standalone checkbox (Major Walls) */
@@ -289,6 +367,55 @@
   min-width: 180px;
 }
 
+/* Specific styling for the symbol dropdown button */
+#symbol {
+  background-color: var(--color-surface-1) !important;
+  border: 1px solid var(--color-border) !important;
+  border-radius: var(--radius-sm) !important;
+  color: var(--color-text-primary) !important;
+  font-family: var(--font-data) !important;
+  font-size: var(--text-md) !important;
+  font-weight: 600 !important;
+  min-height: 36px !important;
+  padding: var(--space-2) var(--space-3) !important;
+  cursor: pointer !important;
+  transition: all var(--transition-fast) !important;
+  outline: none !important;
+}
+
+#symbol:hover {
+  background-color: var(--color-surface-2) !important;
+  border-color: var(--color-border-strong) !important;
+}
+
+#symbol:focus {
+  border-color: var(--color-border-focus) !important;
+  box-shadow: 0 0 0 2px rgba(var(--color-border-focus-rgb), 0.25) !important;
+}
+
+#symbol .dash-dropdown-grid-container {
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
+}
+
+#symbol .dash-dropdown-value {
+  color: var(--color-text-primary) !important;
+  font-family: var(--font-data) !important;
+  font-size: var(--text-md) !important;
+  font-weight: 600 !important;
+}
+
+#symbol .dash-dropdown-trigger-icon {
+  color: var(--color-text-muted) !important;
+  transition: color var(--transition-fast) !important;
+}
+
+#symbol:hover .dash-dropdown-trigger-icon {
+  color: var(--color-text-primary) !important;
+}
+
+/* Legacy Select styling for backwards compatibility */
 .symbol-picker .Select-control {
   background-color: var(--color-surface-1) !important;
   border-color: var(--color-border) !important;
@@ -332,6 +459,76 @@
   border-color: var(--color-text-muted) transparent transparent !important;
 }
 
+/* ---- Dash Dropdown Components ---- */
+.dash-dropdown-grid-container,
+.dash-dropdown-trigger {
+  display: inline-flex;
+  align-items: center;
+  background-color: var(--color-surface-1);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+  transition: border-color var(--transition-fast), background-color var(--transition-fast);
+  min-height: 36px;
+}
+
+.dash-dropdown-grid-container:hover,
+.dash-dropdown-trigger:hover {
+  border-color: var(--color-border-strong);
+  background-color: var(--color-surface-2);
+}
+
+.dash-dropdown-value {
+  color: var(--color-text-primary);
+  font-family: var(--font-data);
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+
+.dash-dropdown-value-item {
+  color: var(--color-text-primary);
+}
+
+.dash-dropdown-trigger-icon {
+  color: var(--color-text-muted);
+  transition: color var(--transition-fast);
+}
+
+.dash-dropdown-grid-container:hover .dash-dropdown-trigger-icon,
+.dash-dropdown-trigger:hover .dash-dropdown-trigger-icon {
+  color: var(--color-text-primary);
+}
+
+/* Dash dropdown menu styling */
+.dash-dropdown-menu {
+  background-color: var(--color-surface-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.dash-dropdown-option {
+  padding: var(--space-2) var(--space-3);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: background-color var(--transition-fast), color var(--transition-fast);
+  font-size: var(--text-sm);
+}
+
+.dash-dropdown-option:hover {
+  background-color: var(--color-surface-3);
+  color: var(--color-text-primary);
+}
+
+.dash-dropdown-option.selected {
+  background-color: var(--color-surface-3);
+  color: var(--color-info);
+  font-weight: 600;
+}
+
 .symbol-picker-container {
   display: flex;
   align-items: center;
@@ -352,6 +549,62 @@
 .symbol-input:focus {
   border-color: var(--color-border-focus);
   outline: none;
+}
+
+/* ---- CFD Offset Input ---- */
+#cfd-offset-input {
+  background-color: var(--color-surface-1);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  color: var(--color-text-primary);
+  font-family: var(--font-data);
+  font-size: var(--text-base);
+  font-weight: 600;
+  outline: none;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+  width: 100px;
+  min-width: 80px;
+}
+
+#cfd-offset-input:hover {
+  border-color: var(--color-border-strong);
+}
+
+#cfd-offset-input:focus {
+  border-color: var(--color-border-focus);
+  box-shadow: 0 0 0 2px rgba(var(--color-border-focus-rgb), 0.25);
+}
+
+#cfd-offset-input::placeholder {
+  color: var(--color-text-muted);
+  font-weight: 400;
+}
+
+/* Generic dash-input-element styling */
+.dash-input-element {
+  background-color: var(--color-surface-1);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  color: var(--color-text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--text-base);
+  outline: none;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.dash-input-element:hover {
+  border-color: var(--color-border-strong);
+}
+
+.dash-input-element:focus {
+  border-color: var(--color-border-focus);
+  box-shadow: 0 0 0 2px rgba(var(--color-border-focus-rgb), 0.25);
+}
+
+.dash-input-element::placeholder {
+  color: var(--color-text-muted);
 }
 
 /* Unit RadioItems (Index/Futures) */
@@ -399,4 +652,63 @@
   border-color: var(--color-border-strong);
   color: var(--color-text-primary);
   font-weight: 600;
+}
+
+/* Dash RadioItems internal styling */
+.dash-radioitems {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.dash-radioitems .dash-input {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  background-color: var(--color-surface-1);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 50%;
+  cursor: pointer;
+  position: relative;
+  flex-shrink: 0;
+  transition: background-color var(--transition-fast), border-color var(--transition-fast);
+  margin: 0;
+}
+
+.dash-radioitems .dash-input:hover {
+  border-color: var(--color-border-strong);
+}
+
+.dash-radioitems .dash-input:checked {
+  background-color: var(--color-surface-1);
+  border-color: var(--color-info);
+}
+
+.dash-radioitems .dash-input:checked::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 4px;
+  width: 6px;
+  height: 6px;
+  background-color: var(--color-info);
+  border-radius: 50%;
+}
+
+.dash-radioitems label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  transition: color var(--transition-fast), background-color var(--transition-fast);
+  white-space: nowrap;
+  cursor: pointer;
+  font-size: var(--text-sm);
+}
+
+.dash-radioitems label:hover {
+  color: var(--color-text-primary);
+  background: rgba(255, 255, 255, 0.04);
 }

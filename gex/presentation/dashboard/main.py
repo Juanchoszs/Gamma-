@@ -40,6 +40,7 @@ from gex.adapters.market_data.flowtape import TAPE
 from gex.adapters.market_data.rtquote import PUBLIC_QUOTES, QUOTES, credentials_present
 from gex.infrastructure.scheduling.scheduler import STATE, market_is_open
 from gex.infrastructure.scheduling.scheduler import native_index_key as scheduler_native_key
+from gex.presentation.dashboard.chart_theme import INSTITUTIONAL_THEME
 
 # --- Palette (mode sombre, cf. skill dataviz) ---
 log = logging.getLogger(__name__)
@@ -49,25 +50,25 @@ _HEAT_BUBBLE_SNAPSHOT_CACHE: dict[
 _HEAT_BUBBLE_CACHE_TTL_S = 5.0
 
 C = {
-    "surface": "#0f1422",
-    "page": "#070a11",
-    "ink": "#f1f5f9",
+    "surface": "#111a25",
+    "page": "#0b1018",
+    "ink": "#e2e8f0",
     "ink2": "#94a3b8",
     "muted": "#64748b",
-    "grid": "#161f30",
-    "axis": "#222f46",
-    "pos": "#00f0ff",   # GEX positif / flux acheteur (cyan néon électrique)
-    "neg": "#ff2e74",   # GEX négatif / flux vendeur (magenta néon vibrant)
+    "grid": "#1a2535",
+    "axis": "#26334d",
+    "pos": "#4caf8a",   # GEX positif - verde institucional
+    "neg": "#e06b7a",   # GEX négatif - rojo institucional
     "spot": "#ffffff",
-    "zg": "#fbbf24",    # or/ambre vibrant — Gamma Flip
-    "warn": "#fbbf24",  # ambre avertissement / PCR neutre
-    "lvl": "#a855f7",   # violet néon — niveaux GEX 0DTE
-    "hvl": "#10b981",   # émeraude — HVL (bascule pondérée par le volume du jour)
-    "cw": "#00f0ff",    # cyan néon — Call Wall (résistance, au-dessus du spot)
-    "ps": "#ff2e74",    # magenta néon — Put Support (support, sous le spot)
-    "d1": "#94a3b8",    # gris ardoise — bornes 1D Min / 1D Max (move attendu)
-    "ok": "#10b981",    # vert émeraude — donnée temps réel
-    "cat": ["#00f0ff", "#fb923c", "#10b981", "#fbbf24"],  # slots 1-4
+    "zg": "#d4a84b",    # Gamma Flip - ámbar institucional
+    "warn": "#d4a84b",  # advertencia - ámbar institucional
+    "lvl": "#5b9bd5",   # niveles GEX - azul institucional
+    "hvl": "#4caf8a",   # HVL - verde institucional
+    "cw": "#5b9bd5",    # Call Wall - azul institucional
+    "ps": "#e06b7a",    # Put Support - rojo institucional
+    "d1": "#94a3b8",    # gris ardoise - bornes
+    "ok": "#4caf8a",    # success - verde institucional
+    "cat": ["#4caf8a", "#d4a84b", "#5b9bd5", "#fbbf24"],  # slots institucionales
 }
 
 FONT = 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
@@ -78,12 +79,11 @@ LOCAL_TZ = datetime.now().astimezone().tzinfo
 BUCKET_KEYS = {"0DTE": "bucket_0DTE", "Semaine": "bucket_week",
                "Mois": "bucket_month", "Tout": "bucket_all"}
 
-TAB_STYLE = {"backgroundColor": "#0b0f19", "color": "#94a3b8",
-             "border": "1px solid #1a2234", "padding": "8px 16px", "fontSize": "13px",
+TAB_STYLE = {"backgroundColor": "#111a25", "color": "#94a3b8",
+             "border": "1px solid #1e2d42", "padding": "8px 16px", "fontSize": "13px",
              "borderRadius": "6px 6px 0 0"}
-TAB_SELECTED = {"backgroundColor": "#0f1422", "color": "#f1f5f9",
-                "border": "1px solid #1a2234", "borderBottom": "2px solid #00f0ff",
-                "boxShadow": "0 0 10px rgba(0, 240, 255, 0.2)",
+TAB_SELECTED = {"backgroundColor": "#182332", "color": "#e2e8f0",
+                "border": "1px solid #1e2d42", "borderBottom": "2px solid #5b9bd5",
                 "padding": "8px 16px", "fontSize": "13px", "fontWeight": "600",
                 "borderRadius": "6px 6px 0 0"}
 HINT_STYLE = {"color": "#898781", "fontSize": "11px", "marginBottom": "8px"}
@@ -143,24 +143,8 @@ def guided(title: str, key: str) -> str:
 
 
 def base_layout(title: str, height: int = 420) -> dict:
-    return dict(
-        title=dict(text=title, font=dict(size=13, color=C["ink"], family=FONT),
-                   x=0.012, y=0.97, xanchor="left"),
-        template=None,
-        paper_bgcolor=C["surface"],
-        plot_bgcolor=C["surface"],
-        font=dict(family=FONT, size=11, color=C["ink2"]),
-        margin=dict(l=58, r=18, t=42, b=38),
-        height=height,
-        xaxis=dict(gridcolor=C["grid"], zerolinecolor=C["axis"], linecolor=C["axis"], tickfont=dict(color=C["muted"])),
-        yaxis=dict(gridcolor=C["grid"], zerolinecolor=C["axis"], linecolor=C["axis"], tickfont=dict(color=C["muted"])),
-        hoverlabel=dict(bgcolor=C["page"], font=dict(family=FONT, color=C["ink"])),
-        showlegend=False,
-        # Pan par défaut : avec le zoom, un simple glissement recadre le
-        # graphique sans intention. Le zoom reste accessible à la molette
-        # (scrollZoom) et par la barre d'outils.
-        dragmode="pan",
-    )
+    """Layout base institucional usando el nuevo sistema de temas."""
+    return INSTITUTIONAL_THEME.get_institutional_layout(title, height)
 
 
 # Molette = zoom, barre d'outils allégée des sélections inutiles ici.
@@ -177,16 +161,16 @@ GRAPH_CONFIG = {
 
 
 def time_range_selector() -> dict:
-    """Boutons de période sur les séries temporelles longues."""
+    """Botones de período para series temporales largas - diseño institucional."""
     return dict(
         rangeselector=dict(
             buttons=[
                 dict(count=1, label="1H", step="hour", stepmode="backward"),
-                dict(count=1, label="1J", step="day", stepmode="backward"),
-                dict(count=7, label="1S", step="day", stepmode="backward"),
+                dict(count=1, label="1D", step="day", stepmode="backward"),
+                dict(count=7, label="1W", step="day", stepmode="backward"),
                 dict(count=1, label="1M", step="month", stepmode="backward"),
                 dict(count=3, label="3M", step="month", stepmode="backward"),
-                dict(step="all", label="Tout"),
+                dict(step="all", label="All"),
             ],
             bgcolor=C["surface"], activecolor=C["axis"],
             bordercolor=C["grid"], borderwidth=1,
@@ -3803,7 +3787,7 @@ def create_app() -> Dash:
 
                     # Quick Guide box
                     html.Div([
-                        html.Div(id="tt-guide-title", className="tt-guide-title", children="⚡ ¿Cómo conectar Tastytrade sin errores?"),
+                        html.Div(id="tt-guide-title", className="tt-guide-title", children="¿Cómo conectar Tastytrade sin errores?"),
                         html.Div(id="tt-step-1", children=[
                             html.B("Opción A (Recomendada - 100% Directa): "),
                             "En ", html.Code("my.tastytrade.com > Manage > My Profile > API > OAuth Applications"),

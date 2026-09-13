@@ -104,17 +104,52 @@
   background: transparent !important;
   border: none !important;
   border-bottom: 2px solid transparent !important;
-  transition: color var(--transition-fast), border-color var(--transition-fast) !important;
+  transition: all var(--transition-fast) !important;
   cursor: pointer;
   white-space: nowrap;
+  position: relative;
 }
 
 .tab-item:hover {
   color: var(--color-text-primary) !important;
-  background: rgba(var(--color-text-primary-rgb), 0.02) !important;
+  background: rgba(var(--color-text-primary-rgb), 0.03) !important;
+  border-bottom-color: rgba(var(--color-border-focus-rgb), 0.3) !important;
 }
 
 .tab-item--selected {
+  color: var(--color-text-primary) !important;
+  font-weight: 600 !important;
+  background: transparent !important;
+  border: none !important;
+  border-bottom: 2px solid var(--color-info) !important;
+}
+
+.tab-item:focus-visible {
+  outline: 2px solid var(--color-border-focus) !important;
+  outline-offset: -2px !important;
+}
+
+/* Dash Tab internal elements */
+.dash-tab-item {
+  padding: var(--space-3) var(--space-5) !important;
+  font-size: var(--text-md) !important;
+  font-weight: 500 !important;
+  color: var(--color-text-muted) !important;
+  background: transparent !important;
+  border: none !important;
+  border-bottom: 2px solid transparent !important;
+  transition: all var(--transition-fast) !important;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.dash-tab-item:hover {
+  color: var(--color-text-primary) !important;
+  background: rgba(var(--color-text-primary-rgb), 0.03) !important;
+  border-bottom-color: rgba(var(--color-border-focus-rgb), 0.3) !important;
+}
+
+.dash-tab-item.dash-tab-item--selected {
   color: var(--color-text-primary) !important;
   font-weight: 600 !important;
   background: transparent !important;
