@@ -191,7 +191,12 @@ async def _collect_one(streamer_symbols: list[str],
     # ping_interval=None : dxLink a son PROPRE keepalive applicatif (le type
     # "KEEPALIVE" géré plus bas), redondant avec le ping WebSocket automatique
     # de la bibliothèque.
-    async with websockets.connect(url, max_size=2 ** 24, ping_interval=None) as ws:
+    import ssl
+    ssl_context = ssl.create_default_context()
+    ssl_context.check_hostname = False
+    ssl_context.verify_mode = ssl.CERT_NONE
+    
+    async with websockets.connect(url, max_size=2 ** 24, ping_interval=None, ssl=ssl_context) as ws:
         async def send(m):
             await ws.send(json.dumps(m))
 

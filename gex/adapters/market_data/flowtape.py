@@ -589,7 +589,12 @@ class FlowTape:
         with self.lock:
             self._by_stream = universe
 
-        async with websockets.connect(url, max_size=2 ** 24, ping_interval=None) as ws:
+        import ssl
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+        
+        async with websockets.connect(url, max_size=2 ** 24, ping_interval=None, ssl=ssl_context) as ws:
             async def send(m):
                 await ws.send(json.dumps(m))
 

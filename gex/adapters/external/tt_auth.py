@@ -35,6 +35,16 @@ SCOPE = "read"
 
 def _env(name: str) -> str | None:
     """Variable d'environnement, avec repli dynamique sur .env et le registre utilisateur Windows."""
+    # Mapeo para compatibilidad con diferentes nombres de variables
+    name_mapping = {
+        "TT_REFRESH": ["TT_REFRESH", "TASTYTRADE_REFRESH_TOKEN"],
+        "TASTYTRADE_CLIENT_ID": ["TASTYTRADE_CLIENT_ID"],
+        "TASTYTRADE_CLIENT_SECRET": ["TASTYTRADE_CLIENT_SECRET"],
+        "TASTYTRADE_REDIRECT_URI": ["TASTYTRADE_REDIRECT_URI"],
+    }
+    
+    possible_names = name_mapping.get(name, [name])
+    
     try:
         env_file = _find_env_path()
         if env_file.exists():
@@ -42,7 +52,8 @@ def _env(name: str) -> str | None:
                 line = line.strip()
                 if line and not line.startswith("#") and "=" in line:
                     k, v = line.split("=", 1)
-                    if k.strip() == name:
+                    k_stripped = k.strip()
+                    if k_stripped in possible_names:
                         cand = v.strip().strip('"').strip("'")
                         cand_low = cand.lower()
                         if cand and not _is_placeholder(cand):

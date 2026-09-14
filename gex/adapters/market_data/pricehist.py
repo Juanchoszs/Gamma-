@@ -117,7 +117,12 @@ async def fetch(stream_symbols: dict[str, str], days: int,
     by_candle = {candle_symbol(v, period): k for k, v in stream_symbols.items()}
     rows: dict[str, list[dict]] = defaultdict(list)
 
-    async with websockets.connect(url, max_size=2 ** 24) as ws:
+    import ssl
+    ssl_context = ssl.create_default_context()
+    ssl_context.check_hostname = False
+    ssl_context.verify_mode = ssl.CERT_NONE
+    
+    async with websockets.connect(url, max_size=2 ** 24, ssl=ssl_context) as ws:
         async def send(m):
             await ws.send(json.dumps(m))
 

@@ -12,6 +12,7 @@
             if (inp && !inp.value) {
                 setTimeout(function() { inp.focus(); }, 50);
             }
+            console.log('Modal Tastytrade abierto');
         }
     }
 
@@ -19,6 +20,33 @@
         var modal = getModal();
         if (modal) {
             modal.style.display = 'none';
+            console.log('Modal Tastytrade cerrado');
+        }
+    }
+
+    function showFeedback(message, isSuccess) {
+        var feedback = document.getElementById('tt-modal-feedback');
+        if (feedback) {
+            feedback.innerHTML = message;
+            feedback.style.display = 'block';
+            if (isSuccess) {
+                feedback.style.background = 'rgba(34, 197, 94, 0.15)';
+                feedback.style.color = '#4ade80';
+                feedback.style.border = '1px solid rgba(34, 197, 94, 0.3)';
+                
+                // Auto-cerrar el modal después de 3 segundos si es éxito
+                setTimeout(function() {
+                    closeModal();
+                    console.log('Modal cerrado automáticamente tras éxito');
+                    // Redirigir a la página principal
+                    window.location.href = '/';
+                }, 3000);
+            } else {
+                feedback.style.background = 'rgba(239, 68, 68, 0.15)';
+                feedback.style.color = '#f87171';
+                feedback.style.border = '1px solid rgba(239, 68, 68, 0.3)';
+            }
+            console.log('Feedback mostrado:', message);
         }
     }
 
@@ -30,6 +58,7 @@
             e.target.closest('.tt-open-trigger') ||
             e.target.closest('[data-action="open-tt-modal"]')
         ) {
+            e.preventDefault();
             openModal();
             return;
         }
@@ -40,6 +69,7 @@
             e.target.closest('#tt-modal-close-btn') ||
             e.target.id === 'tt-modal'
         ) {
+            e.preventDefault();
             closeModal();
             return;
         }
@@ -50,4 +80,13 @@
             closeModal();
         }
     });
+
+    // Expose functions globally for callbacks
+    window.ttModal = {
+        open: openModal,
+        close: closeModal,
+        showFeedback: showFeedback
+    };
+
+    console.log('Script Tastytrade modal cargado correctamente');
 })();

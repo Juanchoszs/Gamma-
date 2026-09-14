@@ -97,6 +97,16 @@ def _is_real_val(v: str | None) -> bool:
 
 def _env(name: str) -> str | None:
     """Variable d'environnement, avec repli dynamique sur .env et le registre Windows."""
+    # Mapeo para compatibilidad con diferentes nombres de variables
+    name_mapping = {
+        "TT_REFRESH": ["TT_REFRESH", "TASTYTRADE_REFRESH_TOKEN"],
+        "TASTYTRADE_CLIENT_ID": ["TASTYTRADE_CLIENT_ID"],
+        "TASTYTRADE_CLIENT_SECRET": ["TASTYTRADE_CLIENT_SECRET"],
+        "TASTYTRADE_REDIRECT_URI": ["TASTYTRADE_REDIRECT_URI"],
+    }
+    
+    possible_names = name_mapping.get(name, [name])
+    
     # 1. Vérifier en priorité le fichier .env pour toujours avoir la version à jour
     try:
         from gex.adapters.external.tt_auth import _find_env_path
@@ -106,7 +116,8 @@ def _env(name: str) -> str | None:
                 line = line.strip()
                 if line and not line.startswith("#") and "=" in line:
                     k, v = line.split("=", 1)
-                    if k.strip() == name:
+                    k_stripped = k.strip()
+                    if k_stripped in possible_names:
                         cand = v.strip().strip('"').strip("'")
                         if _is_real_val(cand):
                             os.environ[name] = cand
@@ -427,12 +438,18 @@ class RealtimeQuotes:
 
     async def _session(self) -> None:
         import websockets
+        import ssl
 
         token, url, access = self._quote_token()
         symbols = self._resolve_symbols(access)
         self._by_stream = {v: k for k, v in symbols.items()}
 
-        async with websockets.connect(url, max_size=2 ** 22) as ws:
+        # Deshabilitar verificación SSL para certificados autofirmados de dxFeed
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+
+        async with websockets.connect(url, max_size=2 ** 22, ssl=ssl_context) as ws:
             async def send(m):
                 await ws.send(json.dumps(m))
 

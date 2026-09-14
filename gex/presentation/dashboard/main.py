@@ -4802,7 +4802,8 @@ def create_app() -> Dash:
         [Output("tt-url-redirect", "href"),
          Output("tt-modal-feedback", "children"),
          Output("tt-modal-feedback", "style"),
-         Output("tt-status-dummy-store", "data")],
+         Output("tt-status-dummy-store", "data"),
+         Output("tt-modal-close-btn", "n_clicks")],
         [Input("tt-modal-save-connect-btn", "n_clicks"),
          Input("tt-modal-save-btn", "n_clicks"),
          Input("tt-modal-disconnect-btn", "n_clicks")],
@@ -4814,61 +4815,128 @@ def create_app() -> Dash:
         prevent_initial_call=True,
     )
     def handle_tt_actions(save_conn_clicks, save_clicks, disc_clicks, cid, sec, ref, lang, dummy_val):
+        import logging
+        log = logging.getLogger(__name__)
+        
         trig = ctx.triggered_id
         dummy_val = (dummy_val or 0) + 1
+        
+        log.info(f"Acción Tastytrade iniciada: {trig}")
+        
         if trig == "tt-modal-disconnect-btn":
+            log.info("Desconectando credenciales Tastytrade")
             tt_auth.clear_credentials()
+            msg = "🔒 Credenciales eliminadas correctamente. Los datos en tiempo real se han desactivado."
             return (
                 no_update,
-                t(lang, "tt_cleared_success"),
+                msg,
                 {"display": "block", "background": "rgba(239, 68, 68, 0.15)", "color": "#f87171", "border": "1px solid rgba(239, 68, 68, 0.3)"},
-                dummy_val
+                dummy_val,
+                0
             )
 
         cid = (cid or "").strip()
         sec = (sec or "").strip()
         ref = (ref or "").strip() or None
 
+        log.info(f"Validando credenciales - Client ID: {cid[:8]}...{cid[-4:] if len(cid) > 8 else cid} si existe")
+        
         if not cid or not sec:
-            err_msg = "Client ID y Client Secret son obligatorios." if lang == "es" else "Client ID and Client Secret are required." if lang == "en" else "Client ID et Client Secret sont requis."
+            err_msg = "❌ Client ID y Client Secret son obligatorios. Por favor completa ambos campos."
+            log.warning("Validación fallida: faltan credenciales")
             return (
                 no_update,
                 err_msg,
                 {"display": "block", "background": "rgba(239, 68, 68, 0.15)", "color": "#f87171", "border": "1px solid rgba(239, 68, 68, 0.3)"},
-                dummy_val
+                dummy_val,
+                0
             )
 
         tt_auth.save_credentials(cid, sec, ref, persist=False)
+        log.info("Credenciales guardadas en memoria")
 
         if trig == "tt-modal-save-connect-btn":
             if ref:
+                log.info("Validando token con Refresh Token directo")
                 try:
                     from gex.adapters.market_data.rtquote import quote_token
                     quote_token()
+                    log.info("Token validado exitosamente")
+                    
                     from gex.adapters.external.tt_web import _demarrer_les_flux
                     _demarrer_les_flux()
+                    log.info("Flujos de datos iniciados")
+                    
+                    success_msg = """✅ ¡Conexión exitosa con Tastytrade!
+<br><br>
+📊 Token validado correctamente
+🔄 Datos en tiempo real activados
+📡 Flujos iniciados: QUOTES, TAPE, CAPTURE
+<br><br>
+El modal se cerrará automáticamente en 3 segundos..."""
+                    
                     return (
                         no_update,
-                        "✅ ¡Conexión exitosa con Tastytrade! Token validado y datos en tiempo real activados.",
+                        success_msg,
                         {"display": "block", "background": "rgba(34, 197, 94, 0.15)", "color": "#4ade80", "border": "1px solid rgba(34, 197, 94, 0.3)"},
-                        dummy_val
+                        dummy_val,
+                        1  # Cierra el modal
                     )
                 except Exception as exc:
+                    log.error(f"Error validando token: {exc}")
+                    error_msg = f"""❌ Error al validar con Tastytrade:
+<br><br>
+{str(exc)}
+<br><br>
+🔍 Verifica:
+- Client ID correcto
+- Client Secret correcto  
+- Refresh Token válido y no expirado
+<br><br>
+💡 Si el Refresh Token expiró, genera uno nuevo en my.tastytrade.com > Manage > My Profile > API > OAuth Applications > Manage > Create Grant"""
                     return (
                         no_update,
-                        f"❌ Error al validar con Tastytrade: {exc}. Verifica tu Client ID, Client Secret y Refresh Token.",
+                        error_msg,
                         {"display": "block", "background": "rgba(239, 68, 68, 0.15)", "color": "#f87171", "border": "1px solid rgba(239, 68, 68, 0.3)"},
-                        dummy_val
+                        dummy_val,
+                        0
                     )
             else:
-                return "/oauth/start", "Redirigiendo a Tastytrade para autorizar en el navegador...", {"display": "block", "background": "rgba(57, 135, 229, 0.15)", "color": "#38bdf8", "border": "1px solid rgba(57, 135, 229, 0.3)"}, dummy_val
+                log.info("Redirigiendo a OAuth sin Refresh Token")
+                info_msg = """🌐 Redirigiendo a Tastytrade para autorización en navegador...
+<br><br>
+📋 Sigue estos pasos:
+1. Inicia sesión en Tastytrade
+2. Aprueba el acceso de la aplicación
+3. Serás redirigido automáticamente de vuelta
+<br><br>
+⚠️ Asegúrate que la Redirect URI coincida con: http://localhost:8080/oauth/callback"""
+                return "/oauth/start", info_msg, {"display": "block", "background": "rgba(57, 135, 229, 0.15)", "color": "#38bdf8", "border": "1px solid rgba(57, 135, 229, 0.3)"}, dummy_val, 0
 
+        log.info("Credenciales guardadas sin conexión inmediata")
+        save_msg = """💾 Credenciales guardadas correctamente
+<br><br>
+🔐 Client ID y Client Secret almacenados
+⏭️ Haz clic en "Guardar y Conectar" para activar tiempo real"""
         return (
             no_update,
-            t(lang, "tt_saved_success"),
+            save_msg,
             {"display": "block", "background": "rgba(34, 197, 94, 0.15)", "color": "#4ade80", "border": "1px solid rgba(34, 197, 94, 0.3)"},
-            dummy_val
+            dummy_val,
+            0
         )
+
+    @app.callback(
+        Output("tt-modal", "style"),
+        [Input("tt-modal-close-btn", "n_clicks")],
+        [State("tt-modal", "style")],
+        prevent_initial_call=True,
+    )
+    def auto_close_modal_on_success(close_clicks, current_style):
+        """Cierra el modal automáticamente cuando hay éxito de conexión"""
+        if close_clicks:
+            return {"display": "none"}
+        return current_style or {"display": "none"}
 
     @app.callback(
         [Output("tt-modal-title", "children"),
