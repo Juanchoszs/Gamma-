@@ -42,6 +42,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
+from datetime import date
 
 import requests
 
@@ -206,6 +207,25 @@ def strike_of(streamer_symbol: str) -> float | None:
                 return float(digits)
             except ValueError:
                 pass
+    return None
+
+
+def expiration_of(streamer_symbol: str) -> str | None:
+    """Expiration YYYY-MM-DD parsed from streamer symbols when encoded."""
+    if not streamer_symbol:
+        return None
+    core = streamer_symbol.split(":")[0].strip()
+    for i in range(len(core) - 1, -1, -1):
+        if core[i] in ("C", "P") and i + 1 < len(core) and core[i + 1].isdigit():
+            raw = core[i - 6:i] if i >= 6 else ""
+            if len(raw) == 6 and raw.isdigit():
+                year = 2000 + int(raw[:2])
+                month = int(raw[2:4])
+                day = int(raw[4:6])
+                try:
+                    return date(year, month, day).isoformat()
+                except ValueError:
+                    return None
     return None
 
 
@@ -436,6 +456,7 @@ class FlowTape:
             "t": now,
             "symbol": symbol,
             "strike": strike_of(stream or ""),
+            "expiration": expiration_of(stream or ""),
             "type": option_type_of(stream or ""),
             "price": px,
             "size": size,

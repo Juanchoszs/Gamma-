@@ -371,18 +371,28 @@ def load_first_snapshot(symbol: str, day: str) -> pd.DataFrame | None:
 
 
 def load_day_snapshots(symbol: str, day: str,
-                       columns: list[str] | None = None) -> list[tuple[datetime, pd.DataFrame]]:
+                       columns: list[str] | None = None,
+                       limit: int | None = None) -> list[tuple[datetime, pd.DataFrame]]:
     """Tous les snapshots d'une séance, horodatés depuis le nom de fichier.
 
     `columns` restreint les colonnes lues : une chaîne SPX pèse ~30 000 lignes
     et une séance en compte une quarantaine, donc lire les 17 colonnes quand
     trois suffisent multiplie le temps de chargement par cinq.
+
+    `limit` sélectionne des snapshots uniformément espacés, toujours avec les
+    bornes de séance. Il est destiné aux vues historiques : les données
+    sous-jacentes restent les snapshots réellement enregistrés, sans points
+    synthétiques, mais le navigateur n'a pas à tracer chaque pull.
     """
     root = SETTINGS.data_dir / "snapshots" / symbol / day
     if not root.exists():
         return []
+    files = sorted(root.glob("*.parquet"))
+    if limit is not None and limit > 0 and len(files) > limit:
+        indices = {round(index * (len(files) - 1) / (limit - 1)) for index in range(limit)} if limit > 1 else {len(files) - 1}
+        files = [file for index, file in enumerate(files) if index in indices]
     out = []
-    for f in sorted(root.glob("*.parquet")):
+    for f in files:
         try:
             ts = datetime.strptime(f"{day} {f.stem}", "%Y-%m-%d %H%M%S")
         except ValueError:

@@ -7,6 +7,7 @@ state rather than manufacturing a price history from option snapshots.
 """
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Mapping
 from datetime import datetime
 
@@ -14,23 +15,32 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 
-from gex.adapters.persistence import store
+from gex.application.options_flow.dto import GEXLevel, OptionsOverlayViewModel
+from gex.application.options_flow.service import FlowBubble
+from gex.domain.options.models import FlowAggressiveness, FlowSide, OptionType
+from gex.presentation.dashboard.chart_animations import animation_engine
+
+log = logging.getLogger(__name__)
 
 COLORS = {
-    "surface": "#070a13",          # Gexbot terminal deep space
-    "card": "#0d1322",
-    "ink": "#f8fafc",
-    "muted": "#94a3b8",
-    "grid": "#161f30",             # Crisp dark terminal grid
-    "up": "#00e676",               # Gexbot emerald bull candle
-    "down": "#ff1744",             # Gexbot coral bear candle
-    "spot": "#ffffff",
-    "call_wall": "#00f0ff",        # Electric neon cyan (Call Wall Resistance)
-    "call_wall_glow": "rgba(0, 240, 255, 0.28)",
-    "put_wall": "#ff2e74",         # Electric neon magenta (Put Wall Support)
-    "put_wall_glow": "rgba(255, 46, 116, 0.28)",
-    "flip": "#fbbf24",             # Vivid amber gold (Gamma Flip)
-    "flip_glow": "rgba(251, 191, 36, 0.22)",
+    "surface": "#0b1118",
+    "card": "#101923",
+    "ink": "#f4f7fb",
+    "muted": "#a8b3c2",
+    "grid": "#17232e",
+    "up": "#2dd4bf",
+    "down": "#f05c7c",
+    "spot": "#f4f7fb",
+    "call_wall": "#22d3ee",
+    "call_wall_glow": "rgba(34, 211, 238, 0.22)",
+    "put_wall": "#f05c7c",
+    "put_wall_glow": "rgba(240, 92, 124, 0.22)",
+    "flip": "#f6c85f",
+    "flip_glow": "rgba(246, 200, 95, 0.18)",
+    "call_flow": "#2dd4bf",
+    "call_flow_passive": "rgba(45, 212, 191, 0.52)",
+    "put_flow": "#f05c7c",
+    "put_flow_passive": "rgba(240, 92, 124, 0.52)",
 }
 
 
@@ -96,6 +106,73 @@ def _overlay_levels(
         [float(strike) for strike in calls.abs().nlargest(3).index.get_level_values("strike")],
         [float(strike) for strike in puts.abs().nlargest(3).index.get_level_values("strike")],
     )
+
+
+def _legacy_gex_levels(
+    chain: pd.DataFrame,
+    spot: float,
+    gamma_flip: float | None,
+    keys: dict,
+    show_call_wall: bool,
+    show_put_wall: bool,
+    show_gamma_flip: bool,
+) -> list[GEXLevel]:
+    call_levels, put_levels = _overlay_levels(chain, spot, keys)
+    levels: list[GEXLevel] = []
+    if show_call_wall:
+        for idx, price in enumerate(call_levels):
+            gex, oi, volume = _wall_stats(chain, float(price), "C")
+            levels.append(GEXLevel(
+                name="Call Wall" if idx == 0 else f"Call Wall {idx + 1}",
+                price=float(price),
+                value=gex,
+                side="C",
+                open_interest=oi,
+                volume=volume,
+                color_key="call_wall",
+                glow_key="call_wall_glow",
+            ))
+    if show_put_wall:
+        for idx, price in enumerate(put_levels):
+            gex, oi, volume = _wall_stats(chain, float(price), "P")
+            levels.append(GEXLevel(
+                name="Put Wall" if idx == 0 else f"Put Wall {idx + 1}",
+                price=float(price),
+                value=gex,
+                side="P",
+                open_interest=oi,
+                volume=volume,
+                color_key="put_wall",
+                glow_key="put_wall_glow",
+            ))
+    if show_gamma_flip and gamma_flip is not None:
+        nearby = chain[np.isclose(chain["strike"], float(gamma_flip))] if "strike" in chain else pd.DataFrame()
+        gex = float(nearby["gex"].sum()) if "gex" in nearby else 0.0
+        oi = float(nearby["open_interest"].fillna(0).sum()) if "open_interest" in nearby else 0.0
+        volume = float(nearby["volume"].fillna(0).sum()) if "volume" in nearby else 0.0
+        levels.append(GEXLevel(
+            name="Gamma Flip",
+            price=float(gamma_flip),
+            value=gex,
+            style="dash",
+            open_interest=oi,
+            volume=volume,
+            color_key="flip",
+            glow_key="flip_glow",
+        ))
+    return levels
+
+
+def _level_enabled(level: GEXLevel, show_call_wall: bool, show_put_wall: bool, show_gamma_flip: bool) -> bool:
+    if not level.visible:
+        return False
+    if level.name.startswith("Call Wall"):
+        return show_call_wall
+    if level.name.startswith("Put Wall"):
+        return show_put_wall
+    if level.name == "Gamma Flip":
+        return show_gamma_flip
+    return True
 
 
 def _gamma_activity_points(
@@ -184,6 +261,105 @@ def _add_gamma_activity(
         ))
 
 
+def _fmt_money(value: float | None) -> str:
+    if value is None:
+        return ""
+    abs_v = abs(value)
+    sign = "-" if value < 0 else ""
+    if abs_v >= 1e9:
+        return f"{sign}${abs_v / 1e9:.2f}B"
+    if abs_v >= 1e6:
+        return f"{sign}${abs_v / 1e6:.2f}M"
+    if abs_v >= 1e3:
+        return f"{sign}${abs_v / 1e3:.1f}K"
+    return f"{sign}${abs_v:,.0f}"
+
+
+def _flow_marker_color(bubble: FlowBubble) -> str:
+    if bubble.option_type is OptionType.CALL:
+        return COLORS["call_flow"] if bubble.side is not FlowSide.SELL else COLORS["call_flow_passive"]
+    return COLORS["put_flow"] if bubble.side is not FlowSide.SELL else COLORS["put_flow_passive"]
+
+
+def _bubble_customdata(bubbles: list[FlowBubble]) -> np.ndarray:
+    return np.asarray([
+        [
+            bubble.option_type.value,
+            bubble.premium,
+            bubble.volume,
+            bubble.event_count,
+            bubble.average_price if bubble.average_price is not None else np.nan,
+            bubble.open_interest if bubble.open_interest is not None else np.nan,
+            bubble.implied_volatility if bubble.implied_volatility is not None else np.nan,
+            bubble.gamma if bubble.gamma is not None else np.nan,
+            bubble.delta if bubble.delta is not None else np.nan,
+            bubble.side.value,
+            _fmt_money(bubble.premium),
+        ]
+        for bubble in bubbles
+    ], dtype=object)
+
+
+def _flow_hover_text(bubble: FlowBubble) -> str:
+    lines = [
+        f"<b>{bubble.option_type.value} Flow</b>",
+        f"Strike: <b>{bubble.strike:,.2f}</b>",
+        f"Premium: <b>{_fmt_money(bubble.premium)}</b>",
+        f"Volume: {bubble.volume:,.0f}",
+        f"Events: {bubble.event_count:,.0f}",
+    ]
+    if bubble.average_price is not None:
+        lines.append(f"Avg price: {bubble.average_price:,.2f}")
+    if bubble.expiration is not None:
+        lines.append(f"Expiration: {bubble.expiration:%Y-%m-%d}")
+    if bubble.open_interest is not None:
+        lines.append(f"Open interest: {bubble.open_interest:,.0f}")
+    if bubble.implied_volatility is not None:
+        lines.append(f"IV: {bubble.implied_volatility:.2%}")
+    if bubble.gamma is not None:
+        lines.append(f"Gamma: {bubble.gamma:.6f}")
+    if bubble.delta is not None:
+        lines.append(f"Delta: {bubble.delta:.4f}")
+    lines.append(f"Side: {bubble.side.value}")
+    if bubble.aggressiveness is not FlowAggressiveness.UNKNOWN:
+        lines.append(f"Aggressiveness: {bubble.aggressiveness.value}")
+    return "<br>".join(lines)
+
+
+def _add_flow_bubbles(
+    fig: go.Figure,
+    bubbles: list[FlowBubble] | None,
+    transform: Callable[[float], float],
+) -> None:
+    if not bubbles:
+        return
+    specs = (
+        (OptionType.CALL, "CALL Flow", COLORS["call_flow"]),
+        (OptionType.PUT, "PUT Flow", COLORS["put_flow"]),
+    )
+    for option_type, name, color in specs:
+        side = [bubble for bubble in bubbles if bubble.option_type is option_type]
+        if not side:
+            continue
+        fig.add_trace(go.Scatter(
+            x=[bubble.timestamp for bubble in side],
+            y=[float(transform(bubble.strike)) for bubble in side],
+            mode="markers",
+            name=name,
+            marker=dict(
+                size=[bubble.size for bubble in side],
+                color=[_flow_marker_color(bubble) for bubble in side],
+                opacity=0.78,
+                sizemode="diameter",
+                line=dict(color=COLORS["surface"], width=1.4),
+            ),
+            customdata=_bubble_customdata(side),
+            text=[_flow_hover_text(bubble) for bubble in side],
+            legendgroup=f"flow-{option_type.value}",
+            hovertemplate="%{text}<br>Time: <b>%{x|%H:%M:%S}</b><extra></extra>",
+        ))
+
+
 def merge_relayout_ranges(
     relayout: Mapping | None,
     current_figure: Mapping | None,
@@ -266,7 +442,7 @@ def _time_rangebreaks(times: pd.Series) -> list[dict]:
 
 def _resample_prices(prices: pd.DataFrame, timeframe: str) -> pd.DataFrame:
     """Aggregate stored bars without inventing OHLC values."""
-    rules = {"1m": "1min", "5m": "5min", "1h": "1h", "4h": "4h"}
+    rules = {"1m": "1min", "5m": "5min", "15m": "15min", "30m": "30min", "1h": "1h", "4h": "4h"}
     rule = rules.get(timeframe)
     if rule is None:
         return prices
@@ -307,15 +483,20 @@ def build_options_overlay(
     show_call_wall: bool = True,
     show_put_wall: bool = True,
     show_gamma_flip: bool = True,
+    show_current_price: bool = True,
+    show_flow: bool = True,
+    show_annotations: bool = True,
+    flow_bubbles: list[FlowBubble] | None = None,
+    gex_levels: list[GEXLevel] | None = None,
+    price_series: pd.DataFrame | None = None,
+    previous_price_series: pd.DataFrame | None = None,
     snapshots: list[tuple[datetime, pd.DataFrame]] | None = None,
     relayout: dict | None = None,
     timeframe: str = "2d",
 ) -> go.Figure:
     """Build the interactive candle/GEX overlay for the selected session."""
-    prices = store.load_prices(symbol, day)
+    prices = price_series.copy() if price_series is not None else pd.DataFrame()
     needed = {"timestamp", "open", "high", "low", "close"}
-    if prices.empty and symbol in {"ES", "NQ"}:
-        prices = store.load_prices({"ES": "SPX", "NQ": "NDX"}[symbol], day)
     if prices.empty:
         return _empty(f"No hay velas OHLC reales disponibles para {symbol} en la sesión {day}.")
     if chain is None or chain.empty:
@@ -324,11 +505,11 @@ def build_options_overlay(
         spot = float(prices["close"].iloc[-1])
 
     # Keep the previous saved session available for a centered multi-session view.
-    all_p_days = store.price_days(symbol)
-    previous_days = [saved_day for saved_day in all_p_days if saved_day < day]
-    if previous_days and timeframe in {"2d", "all"}:
-        prev_day = previous_days[-1]
-        prev_prices = store.load_prices(symbol, prev_day)
+    if timeframe in {"2d", "all"}:
+        if previous_price_series is not None:
+            prev_prices = previous_price_series.copy()
+        else:
+            prev_prices = pd.DataFrame()
         if not prev_prices.empty and needed.issubset(prev_prices.columns):
             prev_prices = prev_prices.dropna(subset=list(needed)).copy()
             prev_prices["timestamp"] = pd.to_datetime(prev_prices["timestamp"])
@@ -400,38 +581,33 @@ def build_options_overlay(
         ))
 
     keys = keys or {}
-    call_levels, put_levels = _overlay_levels(chain, float(spot), keys)
-    level_specs = [
-        (show_call_wall, call_levels, "Call Wall", "C", COLORS["call_wall"], COLORS["call_wall_glow"], "solid"),
-        (show_put_wall, put_levels, "Put Wall", "P", COLORS["put_wall"], COLORS["put_wall_glow"], "solid"),
-        (show_gamma_flip, "gamma_flip", "Gamma Flip", None, COLORS["flip"], COLORS["flip_glow"], "dash"),
+    prepared_levels = gex_levels if gex_levels is not None else _legacy_gex_levels(
+        chain,
+        float(spot),
+        gamma_flip,
+        keys,
+        show_call_wall,
+        show_put_wall,
+        show_gamma_flip,
+    )
+    resolved_levels = [
+        level for level in prepared_levels
+        if _level_enabled(level, show_call_wall, show_put_wall, show_gamma_flip)
     ]
-    resolved_levels = []
-    for enabled, values, label, side, color, glow_color, dash in level_specs:
-        if not enabled:
-            continue
-        if values == "gamma_flip":
-            raw_values = [gamma_flip] if gamma_flip is not None else []
-        else:
-            raw_values = values
-        for rank, raw_value in enumerate(raw_values):
-            if raw_value is None:
-                continue
-            shown_label = label if rank == 0 else f"{label} {rank + 1}"
-            if side:
-                gex, oi, volume = _wall_stats(chain, float(raw_value), side)
-            else:
-                nearby = chain[np.isclose(chain["strike"], float(raw_value))]
-                gex = float(nearby["gex"].sum()) if "gex" in nearby else 0.0
-                oi = float(nearby["open_interest"].fillna(0).sum()) if "open_interest" in nearby else 0.0
-                volume = float(nearby["volume"].fillna(0).sum()) if "volume" in nearby else 0.0
-            resolved_levels.append((float(raw_value), shown_label, color, glow_color, gex, oi, volume, dash))
 
     # Determine largest GEX magnitude to scale wall vivacity and thickness
-    largest_gex = max((abs(item[4]) for item in resolved_levels), default=0.0) or 1.0
+    largest_gex = max((abs(level.value or 0.0) for level in resolved_levels), default=0.0) or 1.0
 
     annotations = []
-    for raw_value, label, color, glow_color, gex, oi, volume, dash in resolved_levels:
+    for level in resolved_levels:
+        raw_value = level.price
+        label = level.name
+        color = COLORS.get(level.color_key or "flip", COLORS["flip"])
+        glow_color = COLORS.get(level.glow_key or "flip_glow", COLORS["flip_glow"])
+        gex = float(level.value or 0.0)
+        oi = float(level.open_interest or 0.0)
+        volume = float(level.volume or 0.0)
+        dash = level.style
         rel_strength = min(1.0, max(0.15, abs(gex) / largest_gex if largest_gex else 0.5))
         dist_pct = ((raw_value - spot) / spot) * 100.0 if spot else 0.0
         dist_str = f"{dist_pct:+.2f}%"
@@ -467,54 +643,62 @@ def build_options_overlay(
             ),
         ))
 
-        # 3. Right-side level badge
-        annotations.append(dict(
-            xref="paper", yref="y",
-            x=1.005, y=float(tx(raw_value)),
-            text=f"<b>{label}</b>: {float(tx(raw_value)):,.1f} ({gex_badge})",
-            showarrow=False,
-            font=dict(color="#000000", size=10, family="Inter, monospace"),
-            align="left",
-            bgcolor=color,
-            bordercolor="#0b0f19",
-            borderwidth=1,
-            borderpad=3,
-            opacity=0.92,
-        ))
+        # Keep the plot readable when several adjacent walls are present. All
+        # lines remain interactive and visible in the legend; only the primary
+        # level of each family gets a persistent badge.
+        primary_badge = label in {"Call Wall", "Put Wall", "Gamma Flip"}
+        if primary_badge:
+            annotations.append(dict(
+                xref="paper", yref="y",
+                x=1.005, y=float(tx(raw_value)),
+                text=f"<b>{label}</b>: {float(tx(raw_value)):,.1f} ({gex_badge})",
+                showarrow=False,
+                font=dict(color=COLORS["surface"], size=10, family="Inter, monospace"),
+                align="left",
+                bgcolor=color,
+                bordercolor=COLORS["grid"],
+                borderwidth=1,
+                borderpad=3,
+                opacity=0.94,
+            ))
 
     activity_window = min(max(window, 0.015), 0.04)
     _add_gamma_activity(fig, _gamma_activity_points(snapshots, spot, activity_window), tx)
+    if show_flow:
+        _add_flow_bubbles(fig, flow_bubbles, tx)
+    log.info("Rendering options-flow overlay with %s flow bubbles", len(flow_bubbles or []))
 
     shown_spot = float(tx(float(spot)))
-    spot_custom = np.repeat([[0.0, 0.0, 0.0, 0, "0.00%"]], len(times), axis=0)
-    fig.add_trace(go.Scatter(
-        x=times, y=np.repeat(shown_spot, len(times)),
-        mode="lines", name="Current price",
-        line=dict(color=COLORS["spot"], width=1.5, dash="dot"),
-        customdata=spot_custom,
-        hovertemplate=(
-            "<b style='color:#ffffff'>● Current price (Spot)</b><br>"
-            "Price: <b>%{y:,.2f}</b><extra></extra>"
-        ),
-    ))
+    if show_current_price:
+        spot_custom = np.repeat([[0.0, 0.0, 0.0, 0, "0.00%"]], len(times), axis=0)
+        fig.add_trace(go.Scatter(
+            x=times, y=np.repeat(shown_spot, len(times)),
+            mode="lines", name="Current price",
+            line=dict(color=COLORS["spot"], width=1.5, dash="dot"),
+            customdata=spot_custom,
+            hovertemplate=(
+                f"<b style='color:{COLORS['spot']}'>● Current price (Spot)</b><br>"
+                "Price: <b>%{y:,.2f}</b><extra></extra>"
+            ),
+        ))
 
-    # Spot right-side badge
-    annotations.append(dict(
-        xref="paper", yref="y",
-        x=1.005, y=shown_spot,
-        text=f"<b>Spot</b>: {shown_spot:,.1f}",
-        showarrow=False,
-        font=dict(color="#000000", size=10, family="Inter, monospace"),
-        align="left",
-        bgcolor="#ffffff",
-        bordercolor="#0b0f19",
-        borderwidth=1,
-        borderpad=3,
-        opacity=0.95,
-    ))
+        # Spot right-side badge
+        annotations.append(dict(
+            xref="paper", yref="y",
+            x=1.005, y=shown_spot,
+            text=f"<b>Spot</b>: {shown_spot:,.1f}",
+            showarrow=False,
+            font=dict(color=COLORS["surface"], size=10, family="Inter, monospace"),
+            align="left",
+            bgcolor=COLORS["spot"],
+            bordercolor=COLORS["grid"],
+            borderwidth=1,
+            borderpad=3,
+            opacity=0.95,
+        ))
 
     focus_window = min(max(window, 0.012), 0.025)
-    level_values = [item[0] for item in resolved_levels]
+    level_values = [level.price for level in resolved_levels]
     range_low = min([spot * (1 - focus_window), *level_values])
     range_high = max([spot * (1 + focus_window), *level_values])
     if range_high <= range_low:
@@ -563,7 +747,51 @@ def build_options_overlay(
             autorange=False,
             side="left",
         ),
-        annotations=annotations,
+        annotations=annotations if show_annotations else [],
     )
     _apply_relayout(fig, relayout)
+    
+    # Aplicar animación de entrada para options overlay
+    fig = animation_engine.apply_entry_animation(fig, chart_type="line")
+    
     return fig
+
+
+def build_options_overlay_from_view_model(
+    view_model: OptionsOverlayViewModel,
+    transform: Callable[[float | np.ndarray], float | np.ndarray] | None = None,
+    show_price: bool = True,
+    show_call_wall: bool = True,
+    show_put_wall: bool = True,
+    show_gamma_flip: bool = True,
+    show_current_price: bool = True,
+    show_flow: bool = True,
+    show_annotations: bool = True,
+    relayout: dict | None = None,
+    timeframe: str = "2d",
+) -> go.Figure:
+    """Render an overlay from an application-prepared view model."""
+    return build_options_overlay(
+        view_model.symbol,
+        view_model.chain,
+        view_model.current_price,
+        view_model.gamma_flip,
+        view_model.keys,
+        view_model.day,
+        view_model.window,
+        transform=transform,
+        show_price=show_price,
+        show_call_wall=show_call_wall,
+        show_put_wall=show_put_wall,
+        show_gamma_flip=show_gamma_flip,
+        show_current_price=show_current_price,
+        show_flow=show_flow,
+        show_annotations=show_annotations,
+        flow_bubbles=view_model.flow_bubbles,
+        gex_levels=view_model.gex_levels or None,
+        price_series=view_model.price_series,
+        previous_price_series=view_model.previous_price_series,
+        snapshots=view_model.snapshots,
+        relayout=relayout,
+        timeframe=timeframe,
+    )

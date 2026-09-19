@@ -17,15 +17,56 @@ respecter : ce serveur ne doit pas être exposé au-delà de la machine locale
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from datetime import time as dt_time
+from time import monotonic
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 from flask import Flask, jsonify, request
 
+from gex.application.market_intelligence import (
+    build_symbol_diagnostics,
+    build_level_inspector_payload,
+    build_level_history_payload,
+    build_market_intelligence_snapshot,
+    build_market_levels_from_gex_outputs,
+    build_market_map_payload,
+    build_options_chain_payload,
+    build_session_levels_from_profile,
+    build_session_profile_payload,
+    diagnostics_payload,
+    inspect_option_data_quality,
+    valid_option_records,
+    market_report_to_dict,
+    market_state_to_dict,
+    OptionsChainConfig,
+    AlertMonitor,
+    classify_data_freshness,
+    MarketIntelligenceConfig,
+    MarketMapConfig,
+    SessionProfileConfig,
+    LevelHistoryObservation,
+    LevelBuildConfig,
+    scenario_to_dict,
+)
 from gex.domain.gex import metrics
 from gex.domain.gex.metrics import ET, EXPIRY_BUCKETS
+from gex.domain.market.intelligence import SessionType
 from gex.infrastructure.scheduling.scheduler import STATE
+from gex.infrastructure.scheduling.scheduler import market_is_open
+
+
+_ALERT_MONITOR = AlertMonitor()
+_INTELLIGENCE_CACHE_TTL_S = 1.5
+_INTELLIGENCE_CACHE: dict[tuple, tuple[float, object]] = {}
+_MARKET_COMPUTE_METRICS: dict[str, tuple[float, datetime]] = {}
+
+
+def _clear_market_intelligence_cache() -> None:
+    """Clear the short-lived presentation cache, primarily for test isolation."""
+    _INTELLIGENCE_CACHE.clear()
+    _MARKET_COMPUTE_METRICS.clear()
 
 
 def _summary_dict(symbol: str, s) -> dict:
@@ -219,6 +260,347 @@ def _current_summary(symbol: str):
     return s, df
 
 
+def _market_intelligence(
+    symbol: str,
+    bucket: str = "0DTE",
+    *,
+    config: MarketIntelligenceConfig | None = None,
+    session_config: SessionProfileConfig | None = None,
+    level_config: LevelBuildConfig | None = None,
+):
+    symbol = symbol.upper()
+    s, df = _current_summary(symbol)
+    if s is None or df is None:
+        return None
+    df = valid_option_records(df)
+    if df.empty:
+        return None
+    if bucket not in EXPIRY_BUCKETS:
+        bucket = "0DTE"
+    effective_config = config or MarketIntelligenceConfig()
+    effective_session_config = session_config or SessionProfileConfig()
+    effective_level_config = level_config or LevelBuildConfig()
+    is_open = market_is_open()
+    freshness, _ = classify_data_freshness(s.timestamp, now=datetime.now(ET))
+    cache_key = (
+        symbol, bucket, s.timestamp, s.spot, s.net_gex, s.zero_gamma,
+        is_open, freshness.value, effective_config, effective_session_config, effective_level_config,
+    )
+    cached = _INTELLIGENCE_CACHE.get(cache_key)
+    if cached is not None and monotonic() - cached[0] <= _INTELLIGENCE_CACHE_TTL_S:
+        return cached[1]
+    started = monotonic()
+    from gex.adapters.persistence import store
+
+    previous_spot = store.previous_close_spot(symbol)
+    structural = previous_spot or s.spot
+    live = s.spot if is_open else structural
+    level_result = metrics.compute_levels(df, structural, live, bucket=bucket)
+    levels = build_market_levels_from_gex_outputs(
+        chain=df,
+        timestamp=s.timestamp,
+        keys=level_result["keys"],
+        zero_gamma=s.zero_gamma,
+        session=SessionType.REGULAR if is_open else SessionType.CLOSED,
+        config=effective_level_config,
+    )
+    session_profile = _session_profile_for_symbol(symbol, s.timestamp, config=effective_session_config)
+    session_levels = build_session_levels_from_profile(session_profile)
+    implied_volatility, call_open_interest, put_open_interest = _option_positioning_inputs(df)
+    snapshot = build_market_intelligence_snapshot(
+        symbol=symbol,
+        spot=s.spot,
+        timestamp=s.timestamp,
+        levels=(*levels, *session_levels),
+        net_gex=s.net_gex,
+        session=SessionType.REGULAR if is_open else SessionType.CLOSED,
+        previous_spot=previous_spot,
+        data_status=freshness.value,
+        implied_volatility=implied_volatility,
+        call_open_interest=call_open_interest,
+        put_open_interest=put_open_interest,
+        config=effective_config,
+    )
+    _INTELLIGENCE_CACHE[cache_key] = (monotonic(), snapshot)
+    _MARKET_COMPUTE_METRICS[symbol] = ((monotonic() - started) * 1_000.0, datetime.now(ET))
+    if len(_INTELLIGENCE_CACHE) > 128:
+        _INTELLIGENCE_CACHE.clear()
+    return snapshot
+
+
+def _option_positioning_inputs(chain: pd.DataFrame) -> tuple[float | None, float | None, float | None]:
+    """Extract presentation inputs from the validated normalized options chain."""
+    iv = pd.to_numeric(chain.get("iv"), errors="coerce") if "iv" in chain else pd.Series(dtype=float)
+    implied_volatility = float(iv[iv > 0].median()) if not iv.empty and (iv > 0).any() else None
+    if not {"type", "open_interest"}.issubset(chain.columns):
+        return implied_volatility, None, None
+    open_interest = pd.to_numeric(chain["open_interest"], errors="coerce").fillna(0.0)
+    option_type = chain["type"].astype(str).str.upper()
+    return (
+        implied_volatility,
+        float(open_interest[option_type == "C"].sum()),
+        float(open_interest[option_type == "P"].sum()),
+    )
+
+
+def _market_map_payload(
+    symbol: str,
+    bucket: str = "0DTE",
+    *,
+    intelligence_config: MarketIntelligenceConfig | None = None,
+    map_config: MarketMapConfig | None = None,
+    session_config: SessionProfileConfig | None = None,
+    level_config: LevelBuildConfig | None = None,
+):
+    symbol = symbol.upper()
+    s, df = _current_summary(symbol)
+    if s is None or df is None:
+        return None
+    df = valid_option_records(df)
+    if df.empty:
+        return None
+    if bucket not in EXPIRY_BUCKETS:
+        bucket = "0DTE"
+    snapshot = _market_intelligence(
+        symbol, bucket, config=intelligence_config, session_config=session_config, level_config=level_config,
+    )
+    if snapshot is None:
+        return None
+    return build_market_map_payload(
+        symbol=symbol,
+        timestamp=s.timestamp,
+        spot=s.spot,
+        chain=df,
+        levels=snapshot.levels,
+        state=snapshot.state,
+        config=map_config,
+    )
+
+
+def _options_chain_payload(
+    symbol: str,
+    *,
+    expiration: str | None = None,
+    strike_range_pct: float = 5.0,
+    side: str = "ALL",
+    min_volume: float = 0.0,
+    min_open_interest: float = 0.0,
+    min_abs_net_gex: float = 0.0,
+    min_abs_delta: float = 0.0,
+):
+    """Serve presentation-ready chain rows from the current enriched source."""
+    symbol = symbol.upper()
+    summary, chain = _current_summary(symbol)
+    if summary is None or chain is None:
+        return None
+    chain = valid_option_records(chain)
+    if chain.empty:
+        return None
+    snapshot = _market_intelligence(symbol, "Tout")
+    return build_options_chain_payload(
+        chain=chain,
+        spot=summary.spot,
+        levels=snapshot.report.key_levels if snapshot is not None else (),
+        config=OptionsChainConfig(
+            expiration=expiration,
+            strike_range_pct=strike_range_pct,
+            side=side,
+            min_volume=min_volume,
+            min_open_interest=min_open_interest,
+            min_abs_net_gex=min_abs_net_gex,
+            min_abs_delta=min_abs_delta,
+        ),
+    )
+
+
+def _market_level_history_payload(symbol: str, day: str | None = None, bucket: str = "Tout"):
+    """Derive history only from persisted enriched snapshots for one session."""
+    from gex.adapters.persistence import store
+
+    symbol = symbol.upper()
+    snapshot_symbol = _preferred(symbol)
+    days = store.snapshot_days(snapshot_symbol)
+    if not days and snapshot_symbol != symbol:
+        snapshot_symbol, days = symbol, store.snapshot_days(symbol)
+    target_day = day or (days[-1] if days else None)
+    if target_day is None or target_day not in days:
+        return None
+    observations: list[LevelHistoryObservation] = []
+    history_columns = ["strike", "type", "expiry", "gex", "open_interest", "volume", "spot"]
+    max_observations = 12
+    for timestamp, chain in store.load_day_snapshots(
+        snapshot_symbol,
+        target_day,
+        columns=history_columns,
+        limit=max_observations,
+    ):
+        if chain is None or chain.empty or "spot" not in chain:
+            continue
+        spot = float(chain["spot"].dropna().iloc[-1]) if chain["spot"].notna().any() else 0.0
+        if spot <= 0:
+            continue
+        # Historical rows represent the GEX stored at each observation. Do not
+        # rerun the gamma-at-spot engine dozens of times while rendering a
+        # session history: it is both costly and would rewrite observed state.
+        snapshot_day = timestamp.date()
+        chain = valid_option_records(chain)
+        scoped_chain = chain[metrics.bucket_mask(chain, bucket, snapshot_day)]
+        keys = metrics.key_levels(scoped_chain, spot, ref_spot=None, all_expiries=True)
+        levels = build_market_levels_from_gex_outputs(
+            chain=scoped_chain,
+            timestamp=timestamp,
+            keys=keys,
+            # Zero-gamma is an expensive solved surface. Historical snapshots
+            # do not persist that solved value, so omit it rather than infer a
+            # path or block the terminal while recomputing it for every point.
+            zero_gamma=None,
+            session=SessionType.REGULAR,
+        )
+        observations.append(LevelHistoryObservation(timestamp=timestamp, spot=spot, levels=levels))
+    payload = build_level_history_payload(symbol=symbol, observations=observations)
+    payload["day"] = target_day
+    payload["sampling"] = {
+        "max_observations": max_observations,
+        "strategy": "evenly_spaced_saved_snapshots",
+    }
+    return payload
+
+
+def _market_level_inspector_payload(symbol: str, level_id: str, bucket: str = "0DTE"):
+    snapshot = _market_intelligence(symbol, bucket)
+    if snapshot is None:
+        return None, "missing"
+    level = _find_market_level(snapshot.report.key_levels, level_id)
+    if level is None:
+        return None, "not_found"
+    return build_level_inspector_payload(
+        level=level,
+        spot=snapshot.state.spot,
+        related_levels=snapshot.report.key_levels,
+        scenarios=snapshot.scenarios,
+    ), None
+
+
+def _find_market_level(levels, level_id: str):
+    normalized_id = str(level_id)
+    for level in levels:
+        if level.id == normalized_id:
+            return level
+    return None
+
+
+def _market_session_payload(
+    symbol: str,
+    day: str | None = None,
+    *,
+    config: SessionProfileConfig | None = None,
+):
+    symbol = symbol.upper()
+    s, _ = _current_summary(symbol)
+    if s is None:
+        return None
+    return _session_profile_for_symbol(symbol, s.timestamp, day=day, config=config)
+
+
+def _session_profile_for_symbol(
+    symbol: str,
+    timestamp: datetime,
+    day: str | None = None,
+    *,
+    config: SessionProfileConfig | None = None,
+):
+    from gex.adapters.persistence import store
+
+    cfg = config or SessionProfileConfig()
+    timezone = ZoneInfo(cfg.timezone)
+    market_timestamp = (
+        timestamp.replace(tzinfo=timezone)
+        if timestamp.tzinfo is None
+        else timestamp.astimezone(timezone)
+    )
+    target_day = day or market_timestamp.date().isoformat()
+    target_date = date.fromisoformat(target_day)
+    # A historical request must be evaluated at that session's close. Using
+    # today's snapshot here silently filters every historical candle out.
+    effective_timestamp = (
+        market_timestamp
+        if target_date == market_timestamp.date()
+        else datetime.combine(target_date, cfg.regular_end, tzinfo=timezone)
+    )
+    frames = []
+    previous_days = [candidate for candidate in store.price_days(symbol) if candidate < target_day]
+    if previous_days:
+        previous = store.load_prices(symbol, previous_days[-1])
+        if previous is not None and not previous.empty:
+            frames.append(previous)
+    current = store.load_prices(symbol, target_day)
+    if current is not None and not current.empty:
+        frames.append(current)
+    prices = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    return build_session_profile_payload(
+        symbol=symbol,
+        timestamp=effective_timestamp,
+        prices=prices,
+        config=cfg,
+    )
+
+
+def _symbol_diagnostics(symbol: str, st, now: datetime):
+    with STATE.lock:
+        summary = st.summary
+        enriched = st.enriched
+    if enriched is None or enriched.empty:
+        option_count = expiration_count = strike_count = 0
+    else:
+        option_count = len(enriched)
+        expiration_count = enriched["expiry"].nunique() if "expiry" in enriched else 0
+        strike_count = enriched["strike"].nunique() if "strike" in enriched else 0
+    quality = inspect_option_data_quality(enriched).to_dict()
+    calculation = _MARKET_COMPUTE_METRICS.get(symbol)
+    return build_symbol_diagnostics(
+        symbol=symbol,
+        last_update=summary.timestamp if summary is not None else None,
+        options_count=option_count,
+        expiration_count=expiration_count,
+        strike_count=strike_count,
+        source=getattr(summary, "source", None),
+        last_error=STATE.last_error,
+        quality=quality,
+        calculation_ms=calculation[0] if calculation else None,
+        last_calculation=calculation[1] if calculation else None,
+        now=now,
+    )
+
+
+def _market_diagnostics_payload() -> dict[str, object]:
+    """Return current system health from the same state used by the API.
+
+    Keeping this builder outside the Flask route lets the local Dash terminal
+    render the exact diagnostics contract without issuing an HTTP request to
+    itself.
+    """
+    from gex.adapters.market_data.rtquote import credentials_present
+    from gex.adapters.external.tt_web import connection_status
+
+    now = datetime.now(ET)
+    with STATE.lock:
+        items = tuple(STATE.per_symbol.items())
+        last_error = STATE.last_error
+    symbols = tuple(_symbol_diagnostics(symbol, st, now) for symbol, st in items)
+    status, _ = connection_status()
+    websocket_status = "CONNECTED" if credentials_present() and status == "connected" else status.upper()
+    return diagnostics_payload(
+        symbols,
+        api_status="OK",
+        websocket_status=websocket_status,
+        last_error=last_error,
+        metadata={
+            "market_open": market_is_open(),
+            "symbol_count": len(symbols),
+        },
+    )
+
+
 def register_api(app) -> None:
     """`app` : l'instance Dash (on grimpe à `.server`) ou directement une
     instance Flask — pratique pour les tests, qui n'ont pas besoin de monter
@@ -310,6 +692,111 @@ def register_api(app) -> None:
             "disclaimer": "Lecture mécanique de la couverture dealers, pas un signal d'entrée.",
         })
 
+    @server.route("/api/v1/<symbol>/market/state")
+    def _market_state(symbol):
+        snapshot = _market_intelligence(symbol, request.args.get("bucket", "0DTE"))
+        if snapshot is None:
+            return jsonify({"error": "indisponible (pas encore de premier pull)"}), 404
+        return jsonify(market_state_to_dict(snapshot.state))
+
+    @server.route("/api/v1/<symbol>/market/scenarios")
+    def _market_scenarios(symbol):
+        snapshot = _market_intelligence(symbol, request.args.get("bucket", "0DTE"))
+        if snapshot is None:
+            return jsonify({"error": "indisponible (pas encore de premier pull)"}), 404
+        return jsonify({
+            "symbol": snapshot.state.symbol,
+            "timestamp": snapshot.state.timestamp.isoformat(),
+            "scenarios": [scenario_to_dict(scenario) for scenario in snapshot.scenarios],
+        })
+
+    @server.route("/api/v1/<symbol>/market/alerts")
+    def _market_alerts(symbol):
+        """Return opt-in transition events; it does not push notifications."""
+        snapshot = _market_intelligence(symbol, request.args.get("bucket", "0DTE"))
+        if snapshot is None:
+            return jsonify({"error": "indisponible (pas encore de premier pull)"}), 404
+        return jsonify({
+            "symbol": snapshot.state.symbol,
+            "alerts": [alert.to_dict() for alert in _ALERT_MONITOR.observe(snapshot)],
+        })
+
+    @server.route("/api/v1/<symbol>/market/report")
+    def _market_report(symbol):
+        snapshot = _market_intelligence(symbol, request.args.get("bucket", "0DTE"))
+        if snapshot is None:
+            return jsonify({"error": "indisponible (pas encore de premier pull)"}), 404
+        return jsonify(market_report_to_dict(snapshot.report))
+
+    @server.route("/api/v1/<symbol>/market/map")
+    def _market_map(symbol):
+        payload = _market_map_payload(symbol, request.args.get("bucket", "0DTE"))
+        if payload is None:
+            return jsonify({"error": "indisponible (pas encore de premier pull)"}), 404
+        return jsonify(payload)
+
+    @server.route("/api/v1/<symbol>/options/chain")
+    def _options_chain(symbol):
+        expiration = request.args.get("expiration") or None
+        side = request.args.get("side", "ALL")
+        try:
+            range_pct = float(request.args.get("range_pct", "5"))
+            min_volume = float(request.args.get("min_volume", "0"))
+            min_open_interest = float(request.args.get("min_open_interest", "0"))
+            min_abs_net_gex = float(request.args.get("min_abs_net_gex", "0"))
+            min_abs_delta = float(request.args.get("min_abs_delta", "0"))
+            payload = _options_chain_payload(
+                symbol,
+                expiration=expiration,
+                strike_range_pct=range_pct,
+                side=side,
+                min_volume=min_volume,
+                min_open_interest=min_open_interest,
+                min_abs_net_gex=min_abs_net_gex,
+                min_abs_delta=min_abs_delta,
+            )
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        if payload is None:
+            return jsonify({"error": "indisponible (pas encore de premier pull)"}), 404
+        return jsonify(payload)
+
+    @server.route("/api/v1/<symbol>/market/levels/history")
+    def _market_levels_history(symbol):
+        bucket = request.args.get("bucket", "Tout")
+        if bucket not in EXPIRY_BUCKETS:
+            return jsonify({"error": "bucket inválido"}), 400
+        payload = _market_level_history_payload(symbol, request.args.get("date"), bucket)
+        if payload is None:
+            return jsonify({"error": "sin snapshots para la sesión solicitada"}), 404
+        return jsonify(payload)
+
+    @server.route("/api/v1/<symbol>/market/levels/<path:level_id>")
+    def _market_level_inspector(symbol, level_id):
+        payload, error = _market_level_inspector_payload(
+            symbol,
+            level_id,
+            request.args.get("bucket", "0DTE"),
+        )
+        if error == "missing":
+            return jsonify({"error": "indisponible (pas encore de premier pull)"}), 404
+        if error == "not_found":
+            return jsonify({"error": "niveau introuvable"}), 404
+        return jsonify(payload)
+
+    @server.route("/api/v1/<symbol>/market/session")
+    def _market_session(symbol):
+        day = request.args.get("date")
+        if day:
+            try:
+                date.fromisoformat(day)
+            except ValueError:
+                return jsonify({"error": "fecha inválida; usa YYYY-MM-DD"}), 400
+        payload = _market_session_payload(symbol, day)
+        if payload is None:
+            return jsonify({"error": "indisponible (pas encore de premier pull)"}), 404
+        return jsonify(payload)
+
     @server.route("/api/v1/<symbol>/strikes")
     def _strikes(symbol):
         symbol = symbol.upper()
@@ -396,3 +883,7 @@ def register_api(app) -> None:
             "text": d.to_text(),
             "signature": list(d.signature),
         })
+
+    @server.route("/api/v1/diagnostics")
+    def _diagnostics():
+        return jsonify(_market_diagnostics_payload())

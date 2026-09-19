@@ -9,54 +9,54 @@
   /* ============================================================
      SURFACES — max 3 depth levels + hover/active
      ============================================================ */
-  --color-bg:             #0b1018;
-  --color-surface-1:      #111a25;
-  --color-surface-2:      #182332;
-  --color-surface-3:      #1e2d40;
-  --color-surface-hover:  #243548;
-  --color-surface-active: #2a3d52;
+  --color-bg:             #070a0f;
+  --color-surface-1:      #0b1118;
+  --color-surface-2:      #101923;
+  --color-surface-3:      #172431;
+  --color-surface-hover:  #1b2d3b;
+  --color-surface-active: #203847;
 
   /* ============================================================
      TYPOGRAPHY
      ============================================================ */
-  --color-text-primary:   #e2e8f0;
-  --color-text-secondary: #94a3b8;
-  --color-text-muted:     #64748b;
-  --color-text-disabled:  #475569;
+  --color-text-primary:   #f4f7fb;
+  --color-text-secondary: #a8b3c2;
+  --color-text-muted:     #748295;
+  --color-text-disabled:  #4d5d6d;
 
   /* ============================================================
      BORDERS
      ============================================================ */
-  --color-border:         #1e2d42;
-  --color-border-subtle:  #162236;
-  --color-border-strong:  #2d4060;
-  --color-border-focus:   #5b9bd5;
+  --color-border:         #1b2a37;
+  --color-border-subtle:  #121e29;
+  --color-border-strong:  #2d4657;
+  --color-border-focus:   #22d3ee;
 
   /* ============================================================
      SEMANTIC STATES
      ============================================================ */
-  --color-positive:       #4caf8a;
-  --color-negative:       #e06b7a;
-  --color-warning:        #d4a84b;
-  --color-info:           #5b9bd5;
-  --color-success:        #4caf8a;
+  --color-positive:       #2dd4bf;
+  --color-negative:       #f05c7c;
+  --color-warning:        #f6c85f;
+  --color-info:           #22d3ee;
+  --color-success:        #34d399;
 
   /* ============================================================
      MARKET SEMANTICS — color = information
      ============================================================ */
-  --market-call:          #4caf8a;
-  --market-put:           #e06b7a;
-  --market-gex-positive:  #4caf8a;
-  --market-gex-negative:  #e06b7a;
-  --market-spot:          #ffffff;
-  --market-flip:          #d4a84b;
-  --market-call-wall:     #5b9bd5;
-  --market-put-wall:      #e06b7a;
-  --market-hvl:           #4caf8a;
+  --market-call:          #2dd4bf;
+  --market-put:           #f05c7c;
+  --market-gex-positive:  #2dd4bf;
+  --market-gex-negative:  #f05c7c;
+  --market-spot:          #f4f7fb;
+  --market-flip:          #f6c85f;
+  --market-call-wall:     #22d3ee;
+  --market-put-wall:      #f05c7c;
+  --market-hvl:           #a78bfa;
   --market-volume:        #a78bfa;
-  --market-open-interest: #5b9bd5;
-  --market-iv:            #d4a84b;
-  --market-delta:         #94a3b8;
+  --market-open-interest: #5e9cf3;
+  --market-iv:            #f6c85f;
+  --market-delta:         #a8b3c2;
 
   /* ============================================================
      SPACING SCALE
@@ -120,7 +120,7 @@
   --muted:        var(--color-text-muted);
   --line:         var(--color-border);
   --line-hover:   var(--color-border-strong);
-  --grid:         #1a2535;
+  --grid:         #17232e;
   --accent:       var(--color-info);
   --pos:          var(--color-positive);
   --neg:          var(--color-negative);
@@ -131,23 +131,23 @@
   --font-mono:    var(--font-data);
 
   /* RGB values for rgba() usage */
-  --color-bg-rgb:             11, 16, 24;
-  --color-surface-1-rgb:      17, 26, 37;
-  --color-surface-2-rgb:      24, 35, 50;
-  --color-surface-3-rgb:      30, 45, 64;
-  --color-surface-hover-rgb:  36, 53, 72;
-  --color-text-primary-rgb:   226, 232, 240;
-  --color-text-secondary-rgb: 148, 163, 184;
-  --color-text-muted-rgb:     100, 116, 139;
-  --color-positive-rgb:       76, 175, 138;
-  --color-negative-rgb:       224, 107, 122;
-  --color-warning-rgb:        212, 168, 75;
-  --color-info-rgb:           91, 155, 213;
-  --color-success-rgb:        76, 175, 138;
-  --color-border-rgb:         30, 45, 66;
-  --color-border-subtle-rgb:  22, 34, 54;
-  --color-border-strong-rgb:  45, 64, 96;
-  --color-border-focus-rgb:   91, 155, 213;
+  --color-bg-rgb:             7, 10, 15;
+  --color-surface-1-rgb:      11, 17, 24;
+  --color-surface-2-rgb:      16, 25, 35;
+  --color-surface-3-rgb:      23, 36, 49;
+  --color-surface-hover-rgb:  27, 45, 59;
+  --color-text-primary-rgb:   244, 247, 251;
+  --color-text-secondary-rgb: 168, 179, 194;
+  --color-text-muted-rgb:     116, 130, 149;
+  --color-positive-rgb:       45, 212, 191;
+  --color-negative-rgb:       240, 92, 124;
+  --color-warning-rgb:        246, 200, 95;
+  --color-info-rgb:           34, 211, 238;
+  --color-success-rgb:        52, 211, 153;
+  --color-border-rgb:         27, 42, 55;
+  --color-border-subtle-rgb:  18, 30, 41;
+  --color-border-strong-rgb:  45, 70, 87;
+  --color-border-focus-rgb:   34, 211, 238;
 
   /* Glow aliases → neutralized. Code referencing these gets no glow. */
   --glow-cyan:    none;

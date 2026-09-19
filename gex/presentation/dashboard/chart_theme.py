@@ -14,40 +14,43 @@ class ChartColors:
     """Paleta de colores institucional para gráficos financieros."""
     
     # Primary data series
-    spot: str = "#ffffff"
-    call: str = "#4caf8a"
-    put: str = "#e06b7a"
-    net: str = "#94a3b8"
+    spot: str = "#f4f7fb"
+    call: str = "#2dd4bf"
+    put: str = "#f05c7c"
+    net: str = "#a8b3c2"
     
     # Key levels
-    call_wall: str = "#5b9bd5"
-    put_wall: str = "#e06b7a"
-    gamma_flip: str = "#d4a84b"
-    hvl: str = "#4caf8a"
+    call_wall: str = "#22d3ee"
+    put_wall: str = "#f05c7c"
+    gamma_flip: str = "#f6c85f"
+    hvl: str = "#a78bfa"
+    session_regular: str = "#5e9cf3"
+    session_overnight: str = "#c084fc"
+    level_neutral: str = "#8c99a8"
     
     # Backgrounds and grid
-    background: str = "#111a25"
-    surface: str = "#182332"
-    grid: str = "#1a2535"
-    axis: str = "#26334d"
+    background: str = "#0b1118"
+    surface: str = "#101923"
+    grid: str = "#17232e"
+    axis: str = "#334354"
     
     # Text colors
-    text_primary: str = "#e2e8f0"
-    text_secondary: str = "#94a3b8"
-    text_muted: str = "#64748b"
+    text_primary: str = "#f4f7fb"
+    text_secondary: str = "#a8b3c2"
+    text_muted: str = "#748295"
     
     # Semantic states
-    positive: str = "#4caf8a"
-    negative: str = "#e06b7a"
-    warning: str = "#d4a84b"
-    info: str = "#5b9bd5"
-    success: str = "#4caf8a"
+    positive: str = "#2dd4bf"
+    negative: str = "#f05c7c"
+    warning: str = "#f6c85f"
+    info: str = "#22d3ee"
+    success: str = "#34d399"
     
     # Heatmap professional palette (replaces neon)
-    heatmap_low: str = "#1e3a5f"
-    heatmap_medium: str = "#3b5998"
-    heatmap_high: str = "#5b9bd5"
-    heatmap_very_high: str = "#7dd3fc"
+    heatmap_low: str = "#25122f"
+    heatmap_medium: str = "#762557"
+    heatmap_high: str = "#0f718a"
+    heatmap_very_high: str = "#45d6d0"
     
     def to_dict(self) -> Dict[str, str]:
         """Convertir a diccionario para uso con Plotly."""
@@ -60,6 +63,9 @@ class ChartColors:
             "put_wall": self.put_wall,
             "gamma_flip": self.gamma_flip,
             "hvl": self.hvl,
+            "session_regular": self.session_regular,
+            "session_overnight": self.session_overnight,
+            "level_neutral": self.level_neutral,
             "background": self.background,
             "surface": self.surface,
             "grid": self.grid,
@@ -257,9 +263,9 @@ class ChartTheme:
         return [
             [0.0, self.colors.heatmap_low],
             [0.25, self.colors.heatmap_medium],
-            [0.5, self.colors.heatmap_high],
-            [0.75, self.colors.heatmap_very_high],
-            [1.0, self.colors.spot]
+            [0.5, self.colors.background],
+            [0.75, self.colors.heatmap_high],
+            [1.0, self.colors.heatmap_very_high],
         ]
     
     def get_color_by_signal(self, signal: str) -> str:

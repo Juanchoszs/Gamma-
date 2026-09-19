@@ -8,7 +8,13 @@ from gex.presentation.dashboard.main import (
     create_app,
     exposure_fig,
     heatmap_bubbles_fig,
+    overlay_expiration_filter,
+    overlay_flow_bubbles,
+    overlay_layer_flags,
 )
+from gex.adapters.market_data.flowtape import expiration_of
+from gex.application.options_flow.service import FlowBubble
+from gex.domain.options.models import FlowSide, OptionType
 
 
 def test_dashboard_uses_packaged_assets_and_registers_callbacks():
@@ -16,15 +22,83 @@ def test_dashboard_uses_packaged_assets_and_registers_callbacks():
     assert Path(app.config.assets_folder).is_dir()
     assert any("heatmap-intraday.figure" in key for key in app.callback_map)
     assert any("options-flow-overlay.figure" in key for key in app.callback_map)
+    assert any("workspace-title.children" in key for key in app.callback_map)
+    assert any(
+        any(item["id"] == "tab" for item in callback["inputs"])
+        and "terminal-nav-link" in str(callback["output"])
+        for callback in app.callback_map.values()
+    )
+    assert "terminal-settings-shortcut" in str(app.layout)
+    assert "chart-command-bar" in str(app.layout)
+    assert "chart-controls-menu" in str(app.layout)
+    assert "overlay-flow-expiration-custom-wrap" in str(app.layout)
+    assert any(
+        "overlay-flow-expiration-custom-wrap.style" in key
+        for key in app.callback_map
+    )
     response = app.server.test_client().get("/healthz")
     assert response.status_code == 200
     assert response.get_json() == {"status": "ok", "service": "gex-dashboard"}
+
+
+def test_chart_control_menu_keeps_overlay_filters_available_without_inline_radios():
+    app = create_app()
+    layout = str(app.layout)
+
+    for control_id in (
+        "overlay-flow-type",
+        "overlay-flow-side",
+        "overlay-flow-expiration",
+        "overlay-min-premium",
+        "overlay-min-volume",
+        "overlay-layers",
+    ):
+        assert control_id in layout
+
+    def find_by_id(component, target_id):
+        if isinstance(component, (list, tuple)):
+            for child in component:
+                found = find_by_id(child, target_id)
+                if found is not None:
+                    return found
+            return None
+        if getattr(component, "id", None) == target_id:
+            return component
+        return find_by_id(getattr(component, "children", ()), target_id)
+
+    assert find_by_id(app.layout, "overlay-flow-side").__class__.__name__ == "Dropdown"
+
+
+def test_settings_expiration_updates_the_shared_expiration_bucket():
+    app = create_app()
+
+    callbacks = [
+        callback for callback in app.callback_map.values()
+        if any(item["id"] == "settings-expiry-bucket" for item in callback["inputs"])
+    ]
+
+    assert "settings-expiry-bucket" in str(app.layout)
+    assert any(callback["output"].component_id == "bucket" for callback in callbacks)
 
 
 def test_overlay_days_require_both_price_and_options_snapshot(monkeypatch):
     monkeypatch.setattr("gex.presentation.dashboard.main.store.price_days", lambda _: ["2026-08-19", "2026-08-20"])
     monkeypatch.setattr("gex.presentation.dashboard.main.store.snapshot_days", lambda _: ["2026-08-20"])
     assert available_overlay_days("SPX") == ["2026-08-20"]
+
+
+def test_overlay_layer_flags_include_annotations_by_default():
+    defaults = overlay_layer_flags(None)
+    without_badges = overlay_layer_flags(["price", "spot", "call_wall"])
+
+    assert defaults["show_annotations"] is True
+    assert without_badges["show_annotations"] is False
+
+
+def test_overlay_expiration_filter_resolves_custom_date():
+    assert overlay_expiration_filter("ALL", "2026-09-25") == "ALL"
+    assert overlay_expiration_filter("CUSTOM", "2026-09-25") == "CUSTOM:2026-09-25"
+    assert overlay_expiration_filter("CUSTOM", "") == "CUSTOM"
 
 
 def test_exposure_graph_preserves_both_manual_axis_ranges():
@@ -142,3 +216,128 @@ def test_bubbles_filter_by_size_and_cap_rendered_points(monkeypatch):
     bubble_traces = [trace for trace in figure.data if trace.name.startswith(("Calls", "Puts"))]
     assert sum(len(trace.x) for trace in bubble_traces) == 2
     assert all("1 contratos" not in hover for trace in bubble_traces for hover in trace.hovertext)
+
+
+def test_overlay_flow_bubbles_cache_reuses_unchanged_tape(monkeypatch):
+    prints = [
+        {
+            "t": pd.Timestamp("2026-09-18 10:00").timestamp(),
+            "strike": 650.0,
+            "type": "C",
+            "price": 1.25,
+            "size": 10.0,
+            "side": "BUY",
+            "notional": 1_250.0,
+        }
+    ]
+    calls = {"build": 0}
+
+    monkeypatch.setattr(
+        "gex.presentation.dashboard.main.TAPE.recent_prints",
+        lambda *_args, **_kwargs: prints,
+    )
+
+    def fake_build(events, **_kwargs):
+        calls["build"] += 1
+        return [
+            FlowBubble(
+                timestamp=pd.Timestamp("2026-09-18 10:00").to_pydatetime(),
+                strike=650.0,
+                option_type=OptionType.CALL,
+                size=12.0,
+                premium=1_250.0,
+                volume=10.0,
+                event_count=1,
+                average_price=1.25,
+                side=FlowSide.BUY,
+            )
+        ]
+
+    monkeypatch.setattr("gex.presentation.dashboard.main.build_flow_bubbles", fake_build)
+    monkeypatch.setattr("gex.presentation.dashboard.main._OVERLAY_FLOW_BUBBLE_CACHE", {})
+
+    first = overlay_flow_bubbles("SPY", 650.0, 0, 0, "ALL", "ALL", "ALL", 0.03)
+    second = overlay_flow_bubbles("SPY", 650.0, 0, 0, "ALL", "ALL", "ALL", 0.03)
+    prints.append({**prints[0], "t": 1_800_000_001.0, "notional": 2_500.0})
+    third = overlay_flow_bubbles("SPY", 650.0, 0, 0, "ALL", "ALL", "ALL", 0.03)
+
+    assert len(first) == len(second) == len(third) == 1
+    assert calls["build"] == 2
+
+
+def test_flowtape_parses_expiration_when_streamer_symbol_encodes_date():
+    assert expiration_of(".SPXW260918C6500") == "2026-09-18"
+    assert expiration_of(".SPXW260919P6400") == "2026-09-19"
+    assert expiration_of(".SPX7710C") is None
+
+
+def test_overlay_flow_expiration_filter_uses_tape_expiration(monkeypatch):
+    prints = [
+        {
+            "t": pd.Timestamp("2026-09-18 10:00").timestamp(),
+            "strike": 650.0,
+            "expiration": "2026-09-18",
+            "type": "C",
+            "price": 1.25,
+            "size": 10.0,
+            "side": "BUY",
+            "notional": 1_250.0,
+        },
+        {
+            "t": pd.Timestamp("2026-09-18 10:01").timestamp(),
+            "strike": 651.0,
+            "expiration": "2026-09-19",
+            "type": "C",
+            "price": 1.25,
+            "size": 10.0,
+            "side": "BUY",
+            "notional": 1_250.0,
+        },
+    ]
+    monkeypatch.setattr(
+        "gex.presentation.dashboard.main.TAPE.recent_prints",
+        lambda *_args, **_kwargs: prints,
+    )
+    monkeypatch.setattr("gex.presentation.dashboard.main._OVERLAY_FLOW_BUBBLE_CACHE", {})
+
+    zero_dte = overlay_flow_bubbles("SPY", 650.0, 0, 0, "CALLS", "BUY", "0DTE", 0.03)
+
+    assert len(zero_dte) == 1
+    assert zero_dte[0].strike == 650.0
+    assert zero_dte[0].expiration is not None
+
+
+def test_overlay_flow_min_volume_filter_uses_tape_size(monkeypatch):
+    prints = [
+        {
+            "t": pd.Timestamp("2026-09-18 10:00").timestamp(),
+            "strike": 650.0,
+            "expiration": "2026-09-18",
+            "type": "C",
+            "price": 1.25,
+            "size": 4.0,
+            "side": "BUY",
+            "notional": 500.0,
+        },
+        {
+            "t": pd.Timestamp("2026-09-18 10:01").timestamp(),
+            "strike": 651.0,
+            "expiration": "2026-09-18",
+            "type": "C",
+            "price": 1.25,
+            "size": 25.0,
+            "side": "BUY",
+            "notional": 3_125.0,
+        },
+    ]
+    monkeypatch.setattr(
+        "gex.presentation.dashboard.main.TAPE.recent_prints",
+        lambda *_args, **_kwargs: prints,
+    )
+    monkeypatch.setattr("gex.presentation.dashboard.main._OVERLAY_FLOW_BUBBLE_CACHE", {})
+
+    bubbles = overlay_flow_bubbles("SPY", 650.0, 0, 10, "CALLS", "BUY", "0DTE", 0.03)
+
+    assert len(bubbles) == 1
+    assert bubbles[0].strike == 651.0
+    assert bubbles[0].volume == 25.0

@@ -12,12 +12,13 @@ from gex.adapters.persistence import store
 from gex.domain.gex import metrics
 from gex.domain.gex.metrics import ET
 from gex.presentation.i18n.i18n import t
+from gex.presentation.dashboard.chart_animations import animation_engine
 
 
 COLORS = {
-    "page": "#0b1018", "surface": "#111a25", "grid": "#1a2535",
-    "muted": "#64748b", "ink": "#e2e8f0", "spot": "#ffffff",
-    "flip": "#d4a84b", "call": "#4caf8a", "put": "#e06b7a",
+    "page": "#070a0f", "surface": "#0b1118", "grid": "#17232e",
+    "muted": "#748295", "ink": "#f4f7fb", "spot": "#f4f7fb",
+    "flip": "#f6c85f", "call": "#2dd4bf", "put": "#f05c7c",
 }
 _SNAPSHOT_CACHE: dict[
     tuple[str, str], tuple[float, list[tuple[datetime, pd.DataFrame]], float]
@@ -149,8 +150,8 @@ def build_intraday_heatmap(
     fig.add_trace(go.Heatmap(
         x=times, y=y_values, z=normalized,
         colorscale=[
-            [0.0, "#101827"], [0.15, "#172554"], [0.42, "#155e75"],
-            [0.68, "#0891b2"], [0.86, "#22c55e"], [1.0, "#fbbf24"],
+            [0.0, "#0d1018"], [0.15, "#172554"], [0.42, "#155e75"],
+            [0.68, "#0f9bb0"], [0.86, "#2dd4bf"], [1.0, "#f6c85f"],
         ],
         zmin=0, zmax=100, colorbar=dict(title="Intensity", thickness=12, tickfont=dict(color=COLORS["muted"])),
         hovertemplate=("<b>Strike</b> %{y:,.0f}<br><b>Time</b> %{x|%H:%M}<br>"
@@ -161,7 +162,7 @@ def build_intraday_heatmap(
     display_spots = real_prices if real_prices is not None else np.asarray(spots)
     fig.add_trace(go.Scatter(
         x=times, y=transform(display_spots), mode="lines", name=t(lang, "legend_spot"),
-        line=dict(color="#ffffff", width=2.4), hovertemplate=f"<b>{t(lang, 'legend_spot')}</b> %{{y:,.2f}}<br>%{{x|%H:%M}}<extra></extra>",
+        line=dict(color=COLORS["spot"], width=2.4), hovertemplate=f"<b>{t(lang, 'legend_spot')}</b> %{{y:,.2f}}<br>%{{x|%H:%M}}<extra></extra>",
     ))
 
     levels = metrics.key_levels(latest, spot, ref_spot=spot, all_expiries=True)
@@ -198,4 +199,8 @@ def build_intraday_heatmap(
             fig.update_xaxes(range=list(x_range), autorange=False)
         if len(y_range) == 2 and all(value is not None for value in y_range):
             fig.update_yaxes(range=[float(value) for value in y_range], autorange=False)
+    
+    # Aplicar animación de entrada
+    fig = animation_engine.apply_entry_animation(fig, chart_type="heatmap")
+    
     return fig

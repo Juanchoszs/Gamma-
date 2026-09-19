@@ -4,12 +4,24 @@ Implementa el patrón Builder para crear gráficos Plotly con diseño
 profesional consistente, reduciendo duplicación y garantizando calidad visual.
 """
 
-from typing import Dict, Any, List, Optional, Callable
+from typing import Dict, Any, List, Optional, Callable, Union
 import plotly.graph_objects as go
 import numpy as np
 from functools import lru_cache
 
 from .chart_theme import INSTITUTIONAL_THEME, ChartTheme
+from .chart_animations import (
+    AnimationEngine, 
+    AnimationConfig, 
+    AnimationSequence, 
+    AnimationType, 
+    AnimationEasing,
+    AnimationPresets,
+    AnimatedChartBuilder,
+    animation_engine,
+    get_cached_animation_config,
+    animate_figure
+)
 
 
 class ChartBuilder:
@@ -29,6 +41,9 @@ class ChartBuilder:
         self._title = ""
         self._height = 420
         self._show_legend = False
+        self._animation_configs: List[AnimationConfig] = []
+        self._animation_sequence: Optional[AnimationSequence] = None
+        self._animations_enabled = True
         return self
     
     def with_base_layout(
@@ -203,7 +218,7 @@ class ChartBuilder:
         return self
     
     def build(self) -> go.Figure:
-        """Construye figura final optimizada."""
+        """Construye figura final optimizada con animaciones."""
         
         # Aplicar layout
         if self.layout_config:
@@ -223,6 +238,119 @@ class ChartBuilder:
         
         # Aplicar tema
         self.theme.apply_theme_to_figure(self.fig)
+        
+        # Aplicar animaciones si están habilitadas
+        if self._animations_enabled:
+            self.fig = self._apply_animations()
+        
+        return self.fig
+    
+    def with_animation(
+        self,
+        animation_type: Union[AnimationType, str],
+        duration_ms: int = 300,
+        easing: Union[AnimationEasing, str] = AnimationEasing.CUBIC_IN_OUT,
+        delay_ms: int = 0
+    ) -> 'ChartBuilder':
+        """Añadir configuración de animación al gráfico."""
+        
+        if not self._animations_enabled:
+            return self
+        
+        # Convertir strings a enums si es necesario
+        if isinstance(animation_type, str):
+            try:
+                animation_type = AnimationType(animation_type)
+            except ValueError:
+                return self
+        
+        if isinstance(easing, str):
+            try:
+                easing = AnimationEasing(easing)
+            except ValueError:
+                easing = AnimationEasing.CUBIC_IN_OUT
+        
+        config = AnimationConfig(
+            animation_type=animation_type,
+            duration_ms=duration_ms,
+            easing=easing,
+            delay_ms=delay_ms
+        )
+        
+        if config.validate():
+            self._animation_configs.append(config)
+        
+        return self
+    
+    def with_animation_preset(self, preset_name: str) -> 'ChartBuilder':
+        """Añadir preset de animación predefinido."""
+        
+        if not self._animations_enabled:
+            return self
+        
+        preset_map = {
+            "fade_in": AnimationPresets.subtle_fade_in(),
+            "scale_up": AnimationPresets.smooth_scale_up(),
+            "slide_up": AnimationPresets.professional_slide_up(),
+            "entry": AnimationPresets.entry_sequence(),
+            "highlight": AnimationPresets.highlight_effect(),
+            "pulse": AnimationPresets.pulse_subtle()
+        }
+        
+        preset = preset_map.get(preset_name)
+        if preset:
+            if isinstance(preset, AnimationSequence):
+                self._animation_sequence = preset
+            else:
+                self._animation_configs.append(preset)
+        
+        return self
+    
+    def with_animation_sequence(self, sequence: AnimationSequence) -> 'ChartBuilder':
+        """Asignar secuencia de animación personalizada."""
+        if self._animations_enabled and sequence.animations:
+            self._animation_sequence = sequence
+        return self
+    
+    def enable_animations(self, enabled: bool = True) -> 'ChartBuilder':
+        """Habilitar o deshabilitar animaciones para este gráfico."""
+        self._animations_enabled = enabled
+        return self
+    
+    def _apply_animations(self) -> go.Figure:
+        """Aplicar configuraciones de animación a la figura."""
+        
+        if not self._animation_configs and not self._animation_sequence:
+            # Aplicar animación de entrada por defecto
+            return animation_engine.apply_entry_animation(self.fig)
+        
+        # Aplicar animaciones individuales con delay escalonado
+        # Nota: fig.data es una tupla inmutable, necesitamos trabajar con lista
+        animated_traces = list(self.fig.data)
+        
+        for i, config in enumerate(self._animation_configs):
+            for j, trace in enumerate(animated_traces):
+                delayed_config = AnimationConfig(
+                    animation_type=config.animation_type,
+                    duration_ms=config.duration_ms,
+                    easing=config.easing,
+                    delay_ms=config.delay_ms + (j * 30)  # 30ms entre traces
+                )
+                animated_traces[j] = animation_engine.apply_animation_to_trace(
+                    trace, delayed_config
+                )
+        
+        # Reemplazar data con traces animados
+        self.fig.data = animated_traces
+        
+        # Aplicar secuencia completa si existe
+        if self._animation_sequence:
+            self.fig = animation_engine.create_animation_frames(
+                self.fig, self._animation_sequence
+            )
+        
+        # Añadir hover animations
+        self.fig = animation_engine.add_hover_animation(self.fig)
         
         return self.fig
     
@@ -248,27 +376,46 @@ class ChartBuilder:
 
 
 class ChartBuilderFactory:
-    """Factory para crear builders especializados."""
+    """Factory para crear builders especializados con animaciones optimizadas."""
     
     @staticmethod
-    def exposure_chart(title: str = "Gamma Exposure") -> ChartBuilder:
+    def exposure_chart(title: str = "Gamma Exposure", animated: bool = True) -> ChartBuilder:
         """Crea builder especializado para gráficos de exposure."""
-        return ChartBuilder().with_base_layout(title, height=560)
+        builder = ChartBuilder().with_base_layout(title, height=560)
+        if animated:
+            builder.with_animation_preset("scale_up")
+        return builder
     
     @staticmethod
-    def heatmap_chart(title: str = "Heatmap") -> ChartBuilder:
+    def heatmap_chart(title: str = "Heatmap", animated: bool = True) -> ChartBuilder:
         """Crea builder especializado para heatmaps."""
-        return ChartBuilder().with_base_layout(title, height=480)
+        builder = ChartBuilder().with_base_layout(title, height=480)
+        if animated:
+            builder.with_animation_preset("fade_in")
+        return builder
     
     @staticmethod
-    def time_series_chart(title: str = "Time Series") -> ChartBuilder:
+    def time_series_chart(title: str = "Time Series", animated: bool = True) -> ChartBuilder:
         """Crea builder especializado para series temporales."""
-        return ChartBuilder().with_base_layout(title, height=420, show_legend=True)
+        builder = ChartBuilder().with_base_layout(title, height=420, show_legend=True)
+        if animated:
+            builder.with_animation_preset("slide_up")
+        return builder
     
     @staticmethod
-    def volatility_chart(title: str = "Volatility") -> ChartBuilder:
+    def volatility_chart(title: str = "Volatility", animated: bool = True) -> ChartBuilder:
         """Crea builder especializado para volatilidad."""
-        return ChartBuilder().with_base_layout(title, height=400)
+        builder = ChartBuilder().with_base_layout(title, height=400)
+        if animated:
+            builder.with_animation_preset("fade_in")
+        return builder
+    
+    @staticmethod
+    def animated_exposure_chart(title: str = "Gamma Exposure") -> ChartBuilder:
+        """Crea builder con animación completa de entrada."""
+        builder = ChartBuilder().with_base_layout(title, height=560)
+        builder.with_animation_sequence(AnimationPresets.entry_sequence())
+        return builder
 
 
 # Cache de layouts para performance

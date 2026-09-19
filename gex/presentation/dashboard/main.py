@@ -17,17 +17,45 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import dash
 from dash import Dash, ctx, dcc, html, no_update
-from dash.dependencies import Input, Output, State
+from dash.dependencies import ALL, Input, Output, State
 from dash.exceptions import PreventUpdate
 
 from gex.domain.analytics import digest
 from gex.domain.gex import metrics
 from gex.domain.market import scales
+from gex.application.options_flow.service import (
+    OptionsFlowOverlayConfig,
+    build_flow_bubbles,
+    events_from_records,
+)
+from gex.application.options_flow.dto import OptionsOverlayViewModel
+from gex.application.options_flow.levels import build_gex_levels
+from gex.application.market_intelligence.level_inspector import build_level_inspector_payload
+from gex.application.market_intelligence.service import MarketIntelligenceConfig
+from gex.application.market_intelligence.market_map import MarketMapConfig
+from gex.application.market_intelligence.session_profile import SessionProfileConfig
+from gex.application.market_intelligence.options_chain import (
+    OptionsChainConfig,
+    available_expirations,
+    build_options_chain_payload,
+)
+from gex.application.market_intelligence.levels import LevelBuildConfig
+from gex.application.market_intelligence.data_quality import valid_option_records
+from gex.application.market_intelligence.alerts import AlertConfig, AlertMonitor
+from gex.domain.options.models import FlowSide, OptionType
 from gex.adapters.persistence import store
-from gex.presentation.api.api import register_api
+from gex.presentation.api.api import (
+    _market_diagnostics_payload,
+    _market_intelligence,
+    _market_level_history_payload,
+    _market_map_payload,
+    _market_session_payload,
+    register_api,
+)
 from gex.presentation.dashboard.heatmap import build_intraday_heatmap
 from gex.presentation.dashboard.options_overlay import (
     build_options_overlay,
+    build_options_overlay_from_view_model,
     merge_relayout_ranges,
 )
 from gex.adapters.external.tt_web import connection_status, register_oauth
@@ -35,12 +63,38 @@ from gex.adapters.external import tt_auth
 from gex.infrastructure.config import SETTINGS, UNDERLYINGS, targets, all_targets
 from gex.presentation.i18n.i18n import LANGS, regime_text, t, wall_labels
 from gex.domain.gex.metrics import ET, EXPIRY_BUCKETS
+from gex.domain.market.intelligence import LevelSource, LevelType, SessionType
 from gex.adapters.market_data import idxopt
 from gex.adapters.market_data.flowtape import TAPE
 from gex.adapters.market_data.rtquote import PUBLIC_QUOTES, QUOTES, credentials_present
 from gex.infrastructure.scheduling.scheduler import STATE, market_is_open
 from gex.infrastructure.scheduling.scheduler import native_index_key as scheduler_native_key
 from gex.presentation.dashboard.chart_theme import INSTITUTIONAL_THEME
+from gex.presentation.dashboard.chart_animations import animation_engine, AnimationPresets
+from gex.presentation.dashboard.terminal import (
+    intelligence_view,
+    alerts_view,
+    diagnostics_view,
+    level_inspector_view,
+    filter_levels,
+    levels_view,
+    market_report_view,
+    overview_briefing_view,
+    options_chain_view,
+    scenarios_view,
+    scenario_inspector_view,
+    session_profile_view,
+    terminal_topbar_market,
+    topbar_market_view,
+    terminal_intelligence_panel,
+    terminal_sidebar,
+    terminal_statusbar,
+    terminal_accent_style,
+    terminal_navigation_pages,
+)
+from gex.presentation.dashboard.level_history import build_level_history_figure
+from gex.presentation.dashboard.level_map import build_level_map_figure
+from gex.presentation.dashboard.market_map import build_market_map_figure
 
 # --- Palette (mode sombre, cf. skill dataviz) ---
 log = logging.getLogger(__name__)
@@ -48,27 +102,29 @@ _HEAT_BUBBLE_SNAPSHOT_CACHE: dict[
     tuple[str, str], tuple[float, list[tuple[datetime, pd.DataFrame]], float]
 ] = {}
 _HEAT_BUBBLE_CACHE_TTL_S = 5.0
+_OVERLAY_FLOW_BUBBLE_CACHE: dict[tuple, tuple[tuple, list]] = {}
+_OVERLAY_FLOW_BUBBLE_CACHE_MAX = 64
 
 C = {
-    "surface": "#111a25",
-    "page": "#0b1018",
-    "ink": "#e2e8f0",
-    "ink2": "#94a3b8",
-    "muted": "#64748b",
-    "grid": "#1a2535",
-    "axis": "#26334d",
-    "pos": "#4caf8a",   # GEX positif - verde institucional
-    "neg": "#e06b7a",   # GEX négatif - rojo institucional
-    "spot": "#ffffff",
-    "zg": "#d4a84b",    # Gamma Flip - ámbar institucional
-    "warn": "#d4a84b",  # advertencia - ámbar institucional
-    "lvl": "#5b9bd5",   # niveles GEX - azul institucional
-    "hvl": "#4caf8a",   # HVL - verde institucional
-    "cw": "#5b9bd5",    # Call Wall - azul institucional
-    "ps": "#e06b7a",    # Put Support - rojo institucional
-    "d1": "#94a3b8",    # gris ardoise - bornes
-    "ok": "#4caf8a",    # success - verde institucional
-    "cat": ["#4caf8a", "#d4a84b", "#5b9bd5", "#fbbf24"],  # slots institucionales
+    "surface": "#0b1118",
+    "page": "#070a0f",
+    "ink": "#f4f7fb",
+    "ink2": "#a8b3c2",
+    "muted": "#748295",
+    "grid": "#17232e",
+    "axis": "#334354",
+    "pos": "#2dd4bf",
+    "neg": "#f05c7c",
+    "spot": "#f4f7fb",
+    "zg": "#f6c85f",
+    "warn": "#f6c85f",
+    "lvl": "#22d3ee",
+    "hvl": "#a78bfa",
+    "cw": "#22d3ee",
+    "ps": "#f05c7c",
+    "d1": "#5e9cf3",
+    "ok": "#34d399",
+    "cat": ["#2dd4bf", "#f05c7c", "#a78bfa", "#f6c85f"],
 }
 
 FONT = 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
@@ -79,15 +135,63 @@ LOCAL_TZ = datetime.now().astimezone().tzinfo
 BUCKET_KEYS = {"0DTE": "bucket_0DTE", "Semaine": "bucket_week",
                "Mois": "bucket_month", "Tout": "bucket_all"}
 
-TAB_STYLE = {"backgroundColor": "#111a25", "color": "#94a3b8",
-             "border": "1px solid #1e2d42", "padding": "8px 16px", "fontSize": "13px",
-             "borderRadius": "6px 6px 0 0"}
-TAB_SELECTED = {"backgroundColor": "#182332", "color": "#e2e8f0",
-                "border": "1px solid #1e2d42", "borderBottom": "2px solid #5b9bd5",
+TAB_STYLE = {"backgroundColor": C["surface"], "color": C["ink2"],
+             "border": f"1px solid {C['grid']}", "padding": "8px 16px", "fontSize": "13px",
+             "borderRadius": "4px 4px 0 0"}
+TAB_SELECTED = {"backgroundColor": "#101923", "color": C["ink"],
+                "border": f"1px solid {C['grid']}", "borderBottom": f"2px solid {C['lvl']}",
                 "padding": "8px 16px", "fontSize": "13px", "fontWeight": "600",
-                "borderRadius": "6px 6px 0 0"}
-HINT_STYLE = {"color": "#898781", "fontSize": "11px", "marginBottom": "8px"}
-TABS = ("main", "profile", "greeks2", "heat", "pos", "tape", "analytics")
+                "borderRadius": "4px 4px 0 0"}
+HINT_STYLE = {"color": C["muted"], "fontSize": "11px", "marginBottom": "8px"}
+TABS = ("main", "map", "profile", "options", "levels", "scenarios", "greeks2", "heat", "pos", "tape", "analytics", "report", "history", "session", "settings", "diagnostics")
+
+
+def _market_map_figure_for_display(
+    symbol: str,
+    bucket: str,
+    *,
+    map_window: float,
+    neutral_gex: float,
+    scenario_limit: int,
+    value_area: float,
+    visible_sources: list[str] | None,
+    wall_min_strength: int = 0,
+):
+    """Build one source-filtered Market Map for either dashboard location."""
+    payload = _market_map_payload(
+        symbol,
+        bucket,
+        intelligence_config=MarketIntelligenceConfig(
+            neutral_gex_threshold=max(float(neutral_gex or 0), 0.0),
+            max_scenarios=max(int(scenario_limit or 5), 0),
+        ),
+        map_config=MarketMapConfig(strike_window_pct=float(map_window or 3.0)),
+        session_config=SessionProfileConfig(value_area_fraction=float(value_area or 0.70)),
+        level_config=LevelBuildConfig(min_wall_strength=max(min(int(wall_min_strength or 0), 100), 0)),
+    )
+    if payload is not None:
+        source_set = set(visible_sources) if visible_sources is not None else {
+            source.value for source in LevelSource
+        }
+        payload = {
+            **payload,
+            "levels": [
+                level for level in payload.get("levels", [])
+                if level.get("source") in source_set
+            ],
+        }
+    return build_market_map_figure(payload)
+
+
+def _profile_chain_for_display(df: pd.DataFrame, bucket: str, side: str) -> pd.DataFrame:
+    """Filter an enriched chain for Gamma Profile without recomputing Greeks."""
+    today = datetime.now(ET).date()
+    scoped = df[metrics.bucket_mask(df, bucket, today)] if bucket in EXPIRY_BUCKETS else df
+    if side == "CALLS":
+        return scoped[scoped["type"] == "C"]
+    if side == "PUTS":
+        return scoped[scoped["type"] == "P"]
+    return scoped
 
 
 def to_local(ts: pd.Series) -> pd.Series:
@@ -232,60 +336,52 @@ def empty_fig(msg: str, title: str = "", height: int | None = None) -> go.Figure
 
 def tv_levels_string(levels: pd.DataFrame | None, hvl: float | None,
                      zg: float | None, keys: dict | None, xf=None) -> str:
-    """Sérialise les niveaux au format attendu par l'indicateur TradingView
-    « GEX Levels (Dealer Gamma Exposure) » : ``prix,libellé,type;...``
-
-    Les codes de type (``res``, ``sup``, ``flip``…) pilotent le style de tracé
-    côté indicateur. Deux correspondances méritent d'être signalées :
-    - HVL est envoyé en ``flip`` : c'est bien une bascule, pondérée par le
-      volume du jour plutôt que par l'open interest ;
-    - 1D Min/Max part en ``eml``/``emh`` (expected move), ce qu'ils sont —
-      les bornes du straddle ATM.
-
-    Les prix sont transposés par ``xf`` : la chaîne sort donc déjà dans
-    l'échelle affichée (indice, ES ou NQ), prête pour la zone de collage
-    correspondante de l'indicateur.
+    """Sérialise les niveaux au format personnalisé pour copia.
+    
+    Format: Call Resistance, valor, Put Support, valor, HVL, valor, ...
     """
     xf = xf or (lambda v: v)
     out: list[str] = []
-    seen: list[float] = []
-
-    # Deux lignes plus proches que ça sont indiscernables à l'œil sur un
-    # graphique, et leurs étiquettes se chevauchent. Le seuil reste très en
-    # dessous de l'écart entre deux strikes (25-50 pts sur les indices, 1 $ sur
-    # les ETF) : deux murs distincts ne peuvent donc jamais être confondus.
-    MERGE_TOL = 0.0002  # 0,02 % — soit ~1,5 pt sur ES
-
-    def add(value, label, kind, dedup=False):
-        """dedup : n'écrit pas un mur déjà couvert par un niveau nommé.
-
-        Call Wall et Put Support sont choisis dans le même classement de
-        strikes que GEX1-5, et le flip tombe souvent sur un mur : sans ce
-        filtre, TradingView superpose des lignes dont les étiquettes se
-        recouvrent. Le niveau nommé l'emporte, étant le plus parlant.
-        """
-        if value is None:
-            return
-        px = xf(value)
-        if dedup and any(abs(px - s) <= MERGE_TOL * abs(px) for s in seen):
-            return
-        seen.append(px)
-        out.append(f"{px:.2f},{label},{kind}")
-
-    add(zg, "Gamma Flip", "flip")
-    add(hvl, "HVL", "flip")
+    
     k = keys or {}
-    add(k.get("call_wall"), "Call Wall", "res")
-    add(k.get("put_support"), "Put Support", "sup")
-    add(k.get("d1_max"), "1D Max", "emh")
-    add(k.get("d1_min"), "1D Min", "eml")
+    
+    # Niveles principales (usando los mismos para 0DTE por ahora)
+    if k.get("call_wall") is not None:
+        cw_val = xf(k.get('call_wall'))
+        out.append(f"Call Resistance, {cw_val:.1f}")
+        out.append(f"Call Resistance 0DTE, {cw_val:.1f}")
+    if k.get("put_support") is not None:
+        ps_val = xf(k.get('put_support'))
+        out.append(f"Put Support, {ps_val:.1f}")
+        out.append(f"Put Support 0DTE, {ps_val:.1f}")
+    if hvl is not None:
+        hvl_val = xf(hvl)
+        out.append(f"HVL, {hvl_val:.1f}")
+        out.append(f"HVL 0DTE, {hvl_val:.1f}")
+    if zg is not None:
+        zg_val = xf(zg)
+        out.append(f"Gamma Wall 0DTE, {zg_val:.1f}")
+    
+    # 1D Min/Max
+    if k.get("d1_max") is not None:
+        d1_max = xf(k.get('d1_max'))
+        out.append(f"1D Max, {d1_max:.2f}")
+    if k.get("d1_min") is not None:
+        d1_min = xf(k.get('d1_min'))
+        out.append(f"1D Min, {d1_min:.2f}")
+    
+    # GEX 1-10
     if levels is not None and not levels.empty:
-        labels = wall_labels(levels)
-        for lv in levels.itertuples():
-            # gpos/gneg = murs classés par gamma absolu, signe selon calls/puts
-            add(lv.strike, labels[lv.strike], "gpos" if lv.gex > 0 else "gneg",
-                dedup=True)
-    return ";".join(out)
+        for i, lv in enumerate(levels.head(10).itertuples(), 1):
+            out.append(f"GEX {i}, {xf(lv.strike):.1f}")
+    
+    # UB/LB (1D Max/Min)
+    if k.get("d1_max") is not None:
+        out.append(f"UB, {d1_max:.2f}")
+    if k.get("d1_min") is not None:
+        out.append(f"LB, {d1_min:.2f}")
+    
+    return ", ".join(out)
 
 
 def _draw_levels(fig, items: list[dict], lo: float, hi: float) -> None:
@@ -367,12 +463,19 @@ def exposure_fig(df: pd.DataFrame, spot: float, zg: float | None, col: str, titl
     bar_w = _bar_width(strikes)
     if spot > 10000 and bar_w:
         bar_w = min(bar_w, spot * 0.008)
+    
+    # Keep bars readable without turning the exposure map into a solid block.
+    bar_w = bar_w * 1.18
 
     fig = go.Figure(
         go.Bar(
             y=strikes, x=net, orientation="h",
             width=bar_w,
-            marker=dict(color=colors, line=dict(width=0)),
+            marker=dict(
+                color=colors, 
+                line=dict(width=0.5, color=C["grid"]),
+                opacity=0.86,
+            ),
             customdata=np.stack([agg["C"] / scale_div, agg["P"] / scale_div], axis=-1),
             hovertemplate=(
                 f"{t(lang, 'hover_strike')} %{{y}}<br>{t(lang, 'hover_net')}: %{{x:.2f}} {unit_lbl}"
@@ -417,6 +520,10 @@ def exposure_fig(df: pd.DataFrame, spot: float, zg: float | None, col: str, titl
         fig.update_yaxes(range=[xf(spot * (1 - view_w)), xf(spot * (1 + view_w))])
     _draw_levels(fig, items, lo_val, hi_val)
     _apply_user_zoom(fig.layout, relayout)
+    
+    # Aplicar animación de entrada
+    fig = animation_engine.apply_entry_animation(fig, chart_type="bar")
+    
     return fig
 
 
@@ -467,6 +574,141 @@ def available_overlay_days(symbol: str) -> list[str]:
     if today in snapshot_days and price_days:
         days.add(today)
     return sorted(days)
+
+
+def overlay_flow_bubbles(
+    symbol: str,
+    spot: float | None,
+    min_premium: float | None,
+    min_volume: float | None,
+    flow_type: str | None,
+    flow_side: str | None,
+    flow_expiration: str | None,
+    window: float | None,
+):
+    """Prepare recent signed tape prints as flow bubbles for the main overlay."""
+    if not spot:
+        return []
+    option_types = {
+        "CALLS": frozenset({OptionType.CALL}),
+        "PUTS": frozenset({OptionType.PUT}),
+    }.get(flow_type or "ALL", frozenset({OptionType.CALL, OptionType.PUT}))
+    sides = {
+        "BUY": frozenset({FlowSide.BUY}),
+        "SELL": frozenset({FlowSide.SELL}),
+        "UNKNOWN": frozenset({FlowSide.UNKNOWN}),
+    }.get(flow_side or "ALL", frozenset({FlowSide.BUY, FlowSide.SELL, FlowSide.UNKNOWN}))
+    try:
+        prints = TAPE.recent_prints(symbol, min_size=0.0, include_combos=False, limit=1000)
+    except Exception as exc:  # pragma: no cover - defensive around optional live tape
+        log.debug("Unable to read live options-flow tape for %s: %s", symbol, exc)
+        return []
+    log.info("Received %s live options-flow prints for %s overlay", len(prints), symbol)
+    signature = _flow_print_signature(prints)
+    cache_key = (
+        symbol,
+        round(float(spot), 2),
+        float(min_premium or 0.0),
+        float(min_volume or 0.0),
+        flow_type or "ALL",
+        flow_side or "ALL",
+        flow_expiration or "ALL",
+        round(float(window or 0.03), 4),
+    )
+    cached = _OVERLAY_FLOW_BUBBLE_CACHE.get(cache_key)
+    if cached and cached[0] == signature:
+        return list(cached[1])
+    records = []
+    for rec in prints:
+        strike = rec.get("strike")
+        price = rec.get("price")
+        quantity = rec.get("size")
+        timestamp = rec.get("t")
+        if strike is None or price is None or quantity is None or timestamp is None:
+            continue
+        records.append({
+            "symbol": symbol,
+            "timestamp": datetime.fromtimestamp(float(timestamp), tz=UTC).astimezone(ET).replace(tzinfo=None),
+            "strike": strike,
+            "expiration": rec.get("expiration"),
+            "type": rec.get("type"),
+            "price": price,
+            "quantity": quantity,
+            "premium": rec.get("notional"),
+            "side": rec.get("side"),
+        })
+    events = events_from_records(records, symbol=symbol)
+    config = OptionsFlowOverlayConfig(
+        min_premium=float(min_premium or 0.0),
+        min_volume=float(min_volume or 0.0),
+        min_bubble_size=9.0,
+        max_bubble_size=36.0,
+        aggregation_seconds=60,
+        max_bubbles=180,
+        option_types=option_types,
+        sides=sides,
+        expiration_filter=flow_expiration or "ALL",
+        visible_strike_range=max(float(window or 0.03), 0.03),
+    )
+    bubbles = build_flow_bubbles(events, current_price=spot, config=config)
+    log.info("Prepared %s options-flow overlay bubbles for %s", len(bubbles), symbol)
+    if len(_OVERLAY_FLOW_BUBBLE_CACHE) >= _OVERLAY_FLOW_BUBBLE_CACHE_MAX:
+        _OVERLAY_FLOW_BUBBLE_CACHE.clear()
+    _OVERLAY_FLOW_BUBBLE_CACHE[cache_key] = (signature, bubbles)
+    return list(bubbles)
+
+
+def _flow_print_signature(prints: list[dict]) -> tuple:
+    if not prints:
+        return (0, None)
+    newest = max((rec.get("t") or 0.0) for rec in prints)
+    oldest = min((rec.get("t") or 0.0) for rec in prints)
+    total_size = sum(float(rec.get("size") or 0.0) for rec in prints)
+    total_notional = sum(float(rec.get("notional") or 0.0) for rec in prints)
+    expirations = tuple(sorted({str(rec.get("expiration") or "") for rec in prints}))
+    return (len(prints), round(float(oldest), 3), round(float(newest), 3),
+            round(total_size, 3), round(total_notional, 2), expirations)
+
+
+def overlay_price_series(symbol: str, day: str, timeframe: str | None) -> tuple[pd.DataFrame, pd.DataFrame | None]:
+    """Load current and optional previous price bars before rendering."""
+    prices = store.load_prices(symbol, day)
+    if prices.empty and symbol in {"ES", "NQ"}:
+        prices = store.load_prices({"ES": "SPX", "NQ": "NDX"}[symbol], day)
+    previous = None
+    if timeframe in {"2d", "all"}:
+        days = [saved_day for saved_day in store.price_days(symbol) if saved_day < day]
+        if not days and symbol in {"ES", "NQ"}:
+            proxy = {"ES": "SPX", "NQ": "NDX"}[symbol]
+            days = [saved_day for saved_day in store.price_days(proxy) if saved_day < day]
+            previous = store.load_prices(proxy, days[-1]) if days else None
+        else:
+            previous = store.load_prices(symbol, days[-1]) if days else None
+    return prices, previous
+
+
+def overlay_layer_flags(layer_values: list[str] | None) -> dict[str, bool]:
+    selected = set(layer_values or [
+        "price", "spot", "call_wall", "put_wall", "gamma_flip", "flow", "annotations",
+    ])
+    return {
+        "show_price": "price" in selected,
+        "show_current_price": "spot" in selected,
+        "show_call_wall": "call_wall" in selected,
+        "show_put_wall": "put_wall" in selected,
+        "show_gamma_flip": "gamma_flip" in selected,
+        "show_flow": "flow" in selected,
+        "show_annotations": "annotations" in selected,
+    }
+
+
+def overlay_expiration_filter(expiration_bucket: str | None, custom_expiration: str | None) -> str:
+    """Resolve the overlay expiration controls into an application filter value."""
+    bucket = str(expiration_bucket or "ALL").upper()
+    if bucket != "CUSTOM":
+        return bucket
+    custom = str(custom_expiration or "").strip()
+    return f"CUSTOM:{custom}" if custom else "CUSTOM"
 
 
 def _apply_user_zoom(lay: dict, relayout: dict | None) -> None:
@@ -741,14 +983,14 @@ def heatmap_intraday_fig(symbol: str, lang: str, day: str | None = None, window:
 
     # 1. Heatmap de Liquididad estilo AlgoAlpha / Bookmap
     algo_colorscale = [
-        [0.00, "#070a11"],  # Vacío de absorción por paso del precio
-        [0.05, "#180e2f"],
-        [0.20, "#33185c"],  # Púrpura profundo
-        [0.40, "#4c1d95"],  # Violeta
-        [0.60, "#0f766e"],  # Teal oscuro
-        [0.75, "#06b6d4"],  # Cian eléctrico
-        [0.90, "#10b981"],  # Esmeralda
-        [1.00, "#facc15"],  # Oro intenso / Máxima concentración de liquidez
+        [0.00, "#070a0f"],  # Absorción / zona recorrida
+        [0.08, "#171126"],
+        [0.24, "#35204b"],
+        [0.42, "#6d275d"],
+        [0.62, "#155e75"],
+        [0.78, "#0f9bb0"],
+        [0.92, "#2dd4bf"],
+        [1.00, "#f6c85f"],  # Concentración máxima
     ]
 
     fig.add_trace(
@@ -772,10 +1014,10 @@ def heatmap_intraday_fig(symbol: str, lang: str, day: str | None = None, window:
             high=candles_df["high"],
             low=candles_df["low"],
             close=candles_df["close"],
-            increasing_line_color="#ffffff",
-            increasing_fillcolor="#ffffff",
-            decreasing_line_color="#e2e8f0",
-            decreasing_fillcolor="rgba(15, 23, 42, 0.90)",
+            increasing_line_color=C["spot"],
+            increasing_fillcolor=C["spot"],
+            decreasing_line_color=C["ink2"],
+            decreasing_fillcolor="rgba(7, 10, 15, 0.90)",
             increasing_line_width=1.5,
             decreasing_line_width=1.5,
             showlegend=False,
@@ -792,7 +1034,7 @@ def heatmap_intraday_fig(symbol: str, lang: str, day: str | None = None, window:
             y=strikes_xf,
             x=-p_vols,
             orientation="h",
-            marker=dict(color="rgba(220, 38, 38, 0.85)", line=dict(color="#ef4444", width=0.5)),
+            marker=dict(color="rgba(240, 92, 124, 0.78)", line=dict(color=C["neg"], width=0.5)),
             name="Ask / Venta",
             showlegend=False,
             hovertemplate="Venta: %{x:,.0f} contratos<extra></extra>",
@@ -806,7 +1048,7 @@ def heatmap_intraday_fig(symbol: str, lang: str, day: str | None = None, window:
             y=strikes_xf,
             x=c_vols,
             orientation="h",
-            marker=dict(color="rgba(16, 185, 129, 0.85)", line=dict(color="#10b981", width=0.5)),
+            marker=dict(color="rgba(45, 212, 191, 0.78)", line=dict(color=C["pos"], width=0.5)),
             name="Bid / Compra",
             showlegend=False,
             hovertemplate="Compra: %{x:,.0f} contratos<extra></extra>",
@@ -816,7 +1058,7 @@ def heatmap_intraday_fig(symbol: str, lang: str, day: str | None = None, window:
 
     # Insignias numéricas de Delta (Δ +25, Δ -37, etc.)
     delta_texts = [f"Δ {int(d):+d}" if abs(d) > 0 else "Δ 0" for d in deltas]
-    delta_colors = ["#34d399" if d > 0 else "#f87171" if d < 0 else "#94a3b8" for d in deltas]
+    delta_colors = [C["pos"] if d > 0 else C["neg"] if d < 0 else C["muted"] for d in deltas]
     fig.add_trace(
         go.Scatter(
             y=strikes_xf,
@@ -831,8 +1073,8 @@ def heatmap_intraday_fig(symbol: str, lang: str, day: str | None = None, window:
     )
 
     # 4. Panel Derecho: Volume Profile Total (gris pizarra con Point of Control en oro)
-    vp_colors = ["#fbbf24" if i == poc_idx else "rgba(100, 116, 139, 0.70)" for i in range(len(strikes))]
-    vp_lines = ["#facc15" if i == poc_idx else "rgba(148, 163, 184, 0.35)" for i in range(len(strikes))]
+    vp_colors = [C["zg"] if i == poc_idx else "rgba(116, 130, 149, 0.52)" for i in range(len(strikes))]
+    vp_lines = [C["zg"] if i == poc_idx else "rgba(168, 179, 194, 0.25)" for i in range(len(strikes))]
 
     fig.add_trace(
         go.Bar(
@@ -857,11 +1099,11 @@ def heatmap_intraday_fig(symbol: str, lang: str, day: str | None = None, window:
     fig.add_hline(
         y=spot_xf,
         line_dash="dot",
-        line_color="#ffffff",
+        line_color=C["spot"],
         line_width=1.5,
         annotation_text=f"<b>{spot_xf:,.1f}</b>",
         annotation_position="top right",
-        annotation_font=dict(color="#ffffff", size=11, family="JetBrains Mono, monospace"),
+        annotation_font=dict(color=C["spot"], size=11, family="JetBrains Mono, monospace"),
         annotation_bgcolor="rgba(30, 41, 59, 0.95)",
     )
 
@@ -891,40 +1133,44 @@ def heatmap_intraday_fig(symbol: str, lang: str, day: str | None = None, window:
     # Layout general TradingView / AlgoAlpha
     fig.update_layout(
         template="plotly_dark",
-        paper_bgcolor="#070a11",
-        plot_bgcolor="#070a11",
+        paper_bgcolor=C["page"],
+        plot_bgcolor=C["page"],
         height=630,
         margin=dict(l=45, r=70, t=55, b=40),
         barmode="overlay",
         xaxis=dict(
-            showgrid=True, gridcolor="#161f30",
+            showgrid=True, gridcolor=C["grid"],
             rangeslider=dict(visible=False),
-            tickfont=dict(color="#94a3b8", size=10),
-            title=dict(text=t(lang, "heat_axis_time"), font=dict(color="#64748b", size=11)),
+            tickfont=dict(color=C["ink2"], size=10),
+            title=dict(text=t(lang, "heat_axis_time"), font=dict(color=C["muted"], size=11)),
         ),
         xaxis2=dict(
-            showgrid=True, gridcolor="#161f30",
-            zeroline=True, zerolinecolor="#334155",
-            tickfont=dict(color="#94a3b8", size=9),
+            showgrid=True, gridcolor=C["grid"],
+            zeroline=True, zerolinecolor=C["axis"],
+            tickfont=dict(color=C["ink2"], size=9),
             showticklabels=False,
         ),
         xaxis3=dict(
-            showgrid=True, gridcolor="#161f30",
-            tickfont=dict(color="#94a3b8", size=9),
+            showgrid=True, gridcolor=C["grid"],
+            tickfont=dict(color=C["ink2"], size=9),
             showticklabels=False,
         ),
         yaxis=dict(
-            showgrid=True, gridcolor="#161f30",
-            tickfont=dict(color="#cbd5e1", size=10),
-            title=dict(text=t(lang, "heat_axis_strike"), font=dict(color="#64748b", size=11)),
+            showgrid=True, gridcolor=C["grid"],
+            tickfont=dict(color=C["ink2"], size=10),
+            title=dict(text=t(lang, "heat_axis_strike"), font=dict(color=C["muted"], size=11)),
         ),
         yaxis3=dict(
-            showgrid=True, gridcolor="#161f30",
-            tickfont=dict(color="#cbd5e1", size=11),
+            showgrid=True, gridcolor=C["grid"],
+            tickfont=dict(color=C["ink2"], size=11),
             side="right",
             showticklabels=True,
         ),
     )
+    
+    # Aplicar animación de entrada para heatmaps
+    fig = animation_engine.apply_entry_animation(fig, chart_type="heatmap")
+    
     return fig
 
 
@@ -979,11 +1225,11 @@ def heatmap_term_fig(symbol: str, lang: str, day: str | None = None, window: flo
         piv = piv / scale
         cb_title = "OI (k)" if scale == 1e3 else "OI"
         colorscale = [
-            [0.0, "#0b0f19"],
-            [0.25, "#1e1b4b"],
-            [0.5, "#0284c7"],
-            [0.75, "#00f0ff"],
-            [1.0, "#fbbf24"],
+            [0.0, C["page"]],
+            [0.25, "#172554"],
+            [0.5, "#155e75"],
+            [0.75, "#22d3ee"],
+            [1.0, C["zg"]],
         ]
         zmid = None
     elif metric == "vol":
@@ -994,11 +1240,11 @@ def heatmap_term_fig(symbol: str, lang: str, day: str | None = None, window: flo
         piv = piv / scale
         cb_title = "Vol (k)" if scale == 1e3 else "Vol"
         colorscale = [
-            [0.0, "#0b0f19"],
-            [0.25, "#31103f"],
-            [0.5, "#be185d"],
-            [0.75, "#f43f5e"],
-            [1.0, "#fbbf24"],
+            [0.0, C["page"]],
+            [0.25, "#351338"],
+            [0.5, "#8c245e"],
+            [0.75, C["neg"]],
+            [1.0, C["zg"]],
         ]
         zmid = None
     else:  # gex
@@ -1018,11 +1264,11 @@ def heatmap_term_fig(symbol: str, lang: str, day: str | None = None, window: flo
         else:
             cb_title = "GEX ($M)"
         colorscale = [
-            [0.0, "#ff2e74"],
-            [0.4, "rgba(255, 46, 116, 0.2)"],
-            [0.5, "#0b0f19"],
-            [0.6, "rgba(0, 240, 255, 0.2)"],
-            [1.0, "#00f0ff"],
+            [0.0, C["neg"]],
+            [0.4, "rgba(240, 92, 124, 0.20)"],
+            [0.5, C["page"]],
+            [0.6, "rgba(34, 211, 238, 0.20)"],
+            [1.0, C["lvl"]],
         ]
         zmid = 0.0
 
@@ -1067,6 +1313,10 @@ def heatmap_term_fig(symbol: str, lang: str, day: str | None = None, window: flo
     lay["yaxis"]["title"] = dict(text=t(lang, "heat_axis_strike"), font=dict(color=C["muted"]))
     lay["xaxis"]["title"] = dict(text=t(lang, "lbl_expiry"), font=dict(color=C["muted"]))
     fig.update_layout(**lay)
+    
+    # Aplicar animación de entrada para heatmap term
+    fig = animation_engine.apply_entry_animation(fig, chart_type="heatmap")
+    
     return fig
 
 
@@ -1174,7 +1424,7 @@ def heatmap_bubbles_fig(symbol: str, lang: str, day: str | None = None, window: 
             marker=dict(
                 size=call_size,
                 color="rgba(0, 240, 255, 0.70)",
-                line=dict(color="#00f0ff", width=1.5),
+                line=dict(color=C["lvl"], width=1.5),
             ),
             hoverinfo="text",
             hovertext=call_hover,
@@ -1189,7 +1439,7 @@ def heatmap_bubbles_fig(symbol: str, lang: str, day: str | None = None, window: 
             marker=dict(
                 size=put_size,
                 color="rgba(255, 46, 116, 0.70)",
-                line=dict(color="#ff2e74", width=1.5),
+                line=dict(color=C["neg"], width=1.5),
             ),
             hoverinfo="text",
             hovertext=put_hover,
@@ -1203,7 +1453,7 @@ def heatmap_bubbles_fig(symbol: str, lang: str, day: str | None = None, window: 
             y=[xf(s) for s in spot_trajectory],
             mode="lines+markers",
             name=t(lang, "legend_spot"),
-            line=dict(color="#ffffff", width=2.4),
+                            line=dict(color=C["spot"], width=2.4),
             marker=dict(size=5, color=C["spot"]),
             hovertemplate=f"{t(lang, 'legend_spot')}: %{{y:,.2f}}<br>{t(lang, 'heat_axis_time')}: %{{x}}<extra></extra>",
         ))
@@ -1272,7 +1522,7 @@ def heatmap_history_fig(symbol: str, lang: str, xf=None) -> go.Figure:
         go.Scatter(
             x=ts, y=xf(hist["spot"].to_numpy()), mode="lines",
             name=t(lang, "legend_spot"),
-            line=dict(color="#ffffff", width=2.4),
+            line=dict(color=C["spot"], width=2.4),
             hovertemplate="%{x|%Y-%m-%d %H:%M}<br>Spot: %{y:,.1f}<extra></extra>",
         ),
         row=1, col=1,
@@ -1326,7 +1576,7 @@ def heatmap_history_fig(symbol: str, lang: str, xf=None) -> go.Figure:
             go.Scatter(
                 x=ts, y=scaled_gex, mode="lines",
                 name=f"Net GEX ({gex_unit})",
-                line=dict(color="#00f0ff", width=2.0),
+                line=dict(color=C["lvl"], width=2.0),
                 fill="tozeroy",
                 fillcolor="rgba(0, 240, 255, 0.15)",
                 hovertemplate=f"%{{x|%Y-%m-%d %H:%M}}<br>GEX: %{{y:+.2f}} {gex_unit}<extra></extra>",
@@ -1343,7 +1593,7 @@ def heatmap_history_fig(symbol: str, lang: str, xf=None) -> go.Figure:
                 x=ts.loc[pcr.index], y=pcr.to_numpy(), mode="lines+markers",
                 marker=dict(size=3),
                 name="PCR (OI)",
-                line=dict(color="#fbbf24", width=2.0),
+                line=dict(color=C["zg"], width=2.0),
                 hovertemplate="%{x|%Y-%m-%d %H:%M}<br>PCR: %{y:.2f}<extra></extra>",
             ),
             row=3, col=1,
@@ -1416,7 +1666,7 @@ def heatmap_fig(symbol: str, lang: str, day: str | None = None,
     # coup d'œil sur un même strike.
     for serie, name, width, colors in (
         (oi, t(lang, "legend_gex_oi"), 0.75, (C["pos"], C["neg"])),
-        (vol, t(lang, "legend_gex_vol"), 0.38, ("#7fb2ee", "#f0a1a1")),
+        (vol, t(lang, "legend_gex_vol"), 0.38, (C["lvl"], C["neg"])),
     ):
         if serie.empty:
             continue
@@ -1672,7 +1922,7 @@ def gamma_flow_fig(symbol: str, lang: str, day: str | None = None,
                         hovertemplate=f"%{{x|%H:%M}}<br>{name}: %{{y:+.2f}} $Bn<extra></extra>")
     if "net" in series:
         fig.add_scatter(x=ts, y=net, mode="lines", name=t(lang, "legend_gnet"),
-                        line=dict(color="#ffffff", width=2.4),
+                        line=dict(color=C["spot"], width=2.4),
                         hovertemplate=f"%{{x|%H:%M}}<br>{t(lang, 'legend_gnet')}: %{{y:+.2f}} $Bn<extra></extra>")
     lay = with_legend(base_layout(title, height=330))
     lay["yaxis"]["title"] = dict(text=t(lang, "axis_gflow_bn"),
@@ -1858,7 +2108,7 @@ def tape_fig(symbol: str, lang: str, day: str | None = None,
     fig = go.Figure()
     if "net" in series:
         fig.add_scatter(x=ts, y=net, mode="lines", name=t(lang, "legend_tape_net"),
-                        line=dict(color="#00f0ff", width=2.4),
+                        line=dict(color=C["lvl"], width=2.4),
                         fill="tozeroy",
                         fillcolor="rgba(0, 240, 255, 0.12)",
                         hovertemplate=(f"%{{x|%H:%M}}<br>{t(lang, 'legend_tape_net')}:"
@@ -1908,7 +2158,7 @@ def flow_fig(symbol: str, lang: str, day: str | None = None) -> go.Figure:
                 marker=dict(color=np.where(vals >= 0, C["pos"], C["neg"]), line=dict(width=0)),
                 hovertemplate=f"%{{x|%H:%M}}<br>{t(lang, 'hover_flow')}: %{{y:.1f}} $M<extra></extra>")
     fig.add_scatter(x=ts, y=cum, mode="lines", name=t(lang, "legend_cum"), yaxis="y2",
-                    line=dict(color="#00f0ff", width=2.2),
+                    line=dict(color=C["lvl"], width=2.2),
                     hovertemplate=f"%{{x|%H:%M}}<br>{t(lang, 'hover_cum')}: %{{y:.1f}} $M<extra></extra>")
     lay = base_layout(title, height=300)
     # deux panneaux empilés partageant l'axe temps (pas de double axe trompeur)
@@ -1946,7 +2196,7 @@ def history_fig(symbol: str, lang: str) -> go.Figure:
     ts = to_local(hist["timestamp"])
     fig = go.Figure()
     fig.add_scatter(x=ts, y=hist["net_gex"] / 1e9, mode="lines", name="GEX",
-                    line=dict(color="#00f0ff", width=2.2),
+                line=dict(color=C["lvl"], width=2.2),
                     fill="tozeroy",
                     fillcolor="rgba(0, 240, 255, 0.12)",
                     hovertemplate="%{x|%d/%m %H:%M}<br>GEX: %{y:.1f} $Bn<extra></extra>")
@@ -1988,7 +2238,7 @@ def spot_zg_fig(symbol: str, lang: str) -> go.Figure:
     ts = to_local(hist["timestamp"])
     fig = go.Figure()
     fig.add_scatter(x=ts, y=hist["spot"], mode="lines", name=t(lang, "legend_spot"),
-                    line=dict(color="#ffffff", width=2.2),
+                    line=dict(color=C["spot"], width=2.2),
                     hovertemplate="%{x|%H:%M}<br>Spot: %{y:.1f}<extra></extra>")
     fig.add_scatter(x=ts, y=hist["zero_gamma"], mode="lines", name=t(lang, "legend_zg"),
                     line=dict(color=C["zg"], width=2.2, dash="dash"),
@@ -2037,24 +2287,28 @@ def smile_fig(df: pd.DataFrame, spot: float, lang: str) -> go.Figure:
 
 
 def profile_fig(df: pd.DataFrame, spot: float, zg: float | None, lang: str,
-                window: float, xf=None) -> go.Figure:
+                window: float, xf=None, *, absolute: bool = False) -> go.Figure:
     """Courbe de GEX net en fonction d'un spot hypothétique."""
     xf = xf or (lambda v: v)
     title = guided(t(lang, "profile_title"), "profile")
-    res = metrics.gamma_profile(df, spot, range_pct=window, steps=201)
+    res = metrics.gamma_profile(df, spot, range_pct=window, steps=201, absolute=absolute)
     if res is None:
         return empty_fig(t(lang, "no_data_window"), title)
     grid, prof = res
     x = xf(grid)
     y = prof / 1e9
     fig = go.Figure()
-    # deux traces pour colorer par polarité sans trompe-l'œil sur l'axe
-    fig.add_scatter(x=x, y=np.where(y >= 0, y, np.nan), mode="lines",
-                    line=dict(color=C["pos"], width=2), name="GEX +",
-                    hovertemplate="%{x:.0f}<br>%{y:.1f} $Bn<extra></extra>")
-    fig.add_scatter(x=x, y=np.where(y < 0, y, np.nan), mode="lines",
-                    line=dict(color=C["neg"], width=2), name="GEX −",
-                    hovertemplate="%{x:.0f}<br>%{y:.1f} $Bn<extra></extra>")
+    if absolute:
+        fig.add_scatter(x=x, y=y, mode="lines", line=dict(color=C["lvl"], width=2),
+                        name="|GEX|", hovertemplate="%{x:.0f}<br>|GEX| %{y:.1f} $Bn<extra></extra>")
+    else:
+        # deux traces pour colorer par polarité sans trompe-l'œil sur l'axe
+        fig.add_scatter(x=x, y=np.where(y >= 0, y, np.nan), mode="lines",
+                        line=dict(color=C["pos"], width=2), name="GEX +",
+                        hovertemplate="%{x:.0f}<br>%{y:.1f} $Bn<extra></extra>")
+        fig.add_scatter(x=x, y=np.where(y < 0, y, np.nan), mode="lines",
+                        line=dict(color=C["neg"], width=2), name="GEX −",
+                        hovertemplate="%{x:.0f}<br>%{y:.1f} $Bn<extra></extra>")
     fig.update_layout(**base_layout(title, height=420))
     fig.update_xaxes(title_text=t(lang, "profile_axis"), title_font=dict(color=C["muted"]))
     fig.update_yaxes(title_text="$Bn / 1%", title_font=dict(color=C["muted"]))
@@ -2077,16 +2331,18 @@ def profile_fig(df: pd.DataFrame, spot: float, zg: float | None, lang: str,
 
 
 def profile_by_expiry_fig(df: pd.DataFrame, spot: float, lang: str,
-                          window: float, xf=None) -> go.Figure:
+                          window: float, xf=None, *, buckets: tuple[str, ...] | None = None,
+                          absolute: bool = False) -> go.Figure:
     """Profil décomposé par bucket d'échéance : ce que pèse le 0DTE seul."""
     title = guided(t(lang, "profile_by_exp"), "profile")
     xf = xf or (lambda v: v)
     today = datetime.now(ET).date()
     fig = go.Figure()
     drawn = 0
-    for i, bucket in enumerate(EXPIRY_BUCKETS):
+    active_buckets = buckets or tuple(EXPIRY_BUCKETS)
+    for i, bucket in enumerate(active_buckets):
         sub = df[metrics.bucket_mask(df, bucket, today)]
-        res = metrics.gamma_profile(sub, spot, range_pct=window, steps=201)
+        res = metrics.gamma_profile(sub, spot, range_pct=window, steps=201, absolute=absolute)
         if res is None:
             continue
         grid, prof = res
@@ -2226,7 +2482,7 @@ def build_positioning_cards(symbol: str, lang: str, xf=None) -> html.Div:
         card(t(lang, "pos_card_calls_oi"), f"{calls_oi:,.0f}", f"{calls_pct:.1f}% de OI total", C["pos"]),
         card(t(lang, "pos_card_puts_oi"), f"{puts_oi:,.0f}", f"{puts_pct:.1f}% de OI total", C["neg"]),
         card(t(lang, "pos_card_pcr_oi"), f"{pcr:.2f}", sentiment, pcr_color),
-        card(t(lang, "pos_card_max_pain"), mp_fmt, mp_sub, "#f59e0b"),
+        card(t(lang, "pos_card_max_pain"), mp_fmt, mp_sub, C["warn"]),
         card(t(lang, "pos_card_call_ceiling"), cw_str, cw_sub, C["pos"]),
         card(t(lang, "pos_card_put_floor"), ps_str, ps_sub, C["neg"]),
     ])
@@ -2305,9 +2561,9 @@ def pos_distribution_fig(df: pd.DataFrame, spot: float, lang: str,
     )
     if max_pain > 0 and lo <= max_pain <= hi:
         fig.add_hline(
-            y=xf(max_pain), line_color="#f59e0b", line_dash="dash", line_width=1.5,
+            y=xf(max_pain), line_color=C["warn"], line_dash="dash", line_width=1.5,
             annotation_text=f"{t(lang, 'pos_max_pain_label')} {xf(max_pain):.0f}",
-            annotation_font_color="#f59e0b",
+            annotation_font_color=C["warn"],
             annotation_position="top left",
         )
 
@@ -2349,7 +2605,7 @@ def pos_history_fig(symbol: str, lang: str, xf=None) -> go.Figure:
         go.Scatter(
             x=ts, y=xf(hist["spot"].to_numpy()), mode="lines",
             name=t(lang, "legend_spot"),
-            line=dict(color="#ffffff", width=2.2),
+            line=dict(color=C["spot"], width=2.2),
             hovertemplate="%{x|%Y-%m-%d %H:%M}<br>Spot: %{y:,.1f}<extra></extra>",
         ),
         row=1, col=1,
@@ -2398,7 +2654,7 @@ def pos_history_fig(symbol: str, lang: str, xf=None) -> go.Figure:
                 x=ts.loc[pcr.index], y=pcr.to_numpy(), mode="lines+markers",
                 marker=dict(size=3),
                 name="PCR (OI)",
-                line=dict(color="#fbbf24", width=2.0),
+                line=dict(color=C["zg"], width=2.0),
                 hovertemplate="%{x|%Y-%m-%d %H:%M}<br>PCR: %{y:.2f}<extra></extra>",
             ),
             row=2, col=1,
@@ -2899,7 +3155,7 @@ def vol_surface_fig(symbol: str, lang: str, window: float = 0.15) -> go.Figure:
         return empty_fig(t(lang, "no_iv"), title, height=380)
 
     expiries = sorted(sel["expiry"].unique())[:4]
-    palette = [C["pos"], C["neg"], C["zg"], "#a855f7"]
+    palette = [C["pos"], C["neg"], C["zg"], C["hvl"]]
     fig = go.Figure()
     for i, exp in enumerate(expiries):
         chunk = sel[sel["expiry"] == exp].sort_values("strike")
@@ -2967,7 +3223,7 @@ def iv_term_structure_fig(symbol: str, lang: str) -> go.Figure:
             x=[row["dte"]], y=[row["iv"]], mode="markers+text",
             name="ATM IV",
             marker=dict(size=14, color=C["pos"], symbol="diamond",
-                        line=dict(width=2, color="#ffffff")),
+                        line=dict(width=2, color=C["spot"])),
             text=[f"  {row['iv']:.1f}% ({row['exp']})"],
             textposition="middle right",
             textfont=dict(color=C["pos"], size=13),
@@ -3031,8 +3287,8 @@ def whale_tracker_table(symbol: str, lang: str) -> html.Div:
         stat_txt = t(lang, "whale_live_monitoring" if is_conn else "whale_empty")
         return html.Div([
             html.Div([
-                html.Span("● ", style={"color": stat_color, "fontSize": "14px", "marginRight": "6px"}),
-                html.Span(f"{symbol} Whale Tracker — ", style={"fontWeight": "600", "color": "#ffffff"}),
+                html.Span(className="live-pulse", style={"backgroundColor": stat_color}, **{"aria-hidden": "true"}),
+                html.Span(f"{symbol} Whale Tracker — ", style={"fontWeight": "600", "color": C["ink"]}),
                 html.Span(f"Filtre: ≥{min_contracts} contrats / ≥${min_usd:,.0f} notionnel. ", style={"color": C["muted"]}),
                 html.Span(stat_txt, style={"color": C["muted"]}),
             ], className="whale-status-card")
@@ -3235,7 +3491,7 @@ def levels_table(symbol: str, lang: str, window: float = 0.05) -> html.Div:
 
         trs.append(html.Tr([
             html.Td(strike_fmt, className="lvl-td lvl-mono",
-                     style={"fontWeight": "700", "color": C["spot"] if at_spot else "#ffffff"}),
+                     style={"fontWeight": "700", "color": C["spot"]}),
             html.Td(_fmt_cell(gex_raw), className="lvl-td lvl-mono lvl-num",
                      style={"color": couleur, "fontWeight": "600"}),
             html.Td(_fmt_cell(row['dex']), className="lvl-td lvl-mono lvl-num"),
@@ -3264,6 +3520,8 @@ def create_app() -> Dash:
     init_ref = _env("TT_REFRESH") or ""
 
     init_sym = enabled[0].key if enabled else "SPX"
+    alert_monitor = AlertMonitor()
+    alert_monitor_threshold: int | None = None
     init_overlay_days = available_overlay_days(init_sym)
     today_str = datetime.now(ET).strftime("%Y-%m-%d")
     init_overlay_options = [
@@ -3298,6 +3556,7 @@ def create_app() -> Dash:
         # native_notice_content) — vides par défaut, peuplés par le callback
         # native_notice sur changement de symbole.
         html.Div(id="native-banner", className="native-banner", style={"display": "none"}),
+        dcc.Store(id="terminal-alert-state", data={"enabled": False, "events": []}, storage_type="local"),
         # ------------------------------------------------------ barre haute
         html.Div([
             html.Div([
@@ -3306,6 +3565,7 @@ def create_app() -> Dash:
                     html.Span(id="app-title"),
                     html.Span(id="brand-sub", className="brand-sub"),
                 ], className="brand"),
+                terminal_topbar_market(),
                 html.Div([
                     dcc.Dropdown(
                         id="symbol", className="symbol-picker",
@@ -3319,6 +3579,11 @@ def create_app() -> Dash:
                         id="lang", className="seg",
                         options=[{"label": l.upper(), "value": l} for l in LANGS],
                         value="es", inline=True, persistence=True, persistence_type="local"),
+                    html.Button(
+                        "SETTINGS", id="terminal-settings-shortcut",
+                        className="terminal-topbar-settings", n_clicks=0,
+                        title="Open terminal settings",
+                    ),
                     # page statique servie depuis assets/ (nouvel onglet)
                     html.A(id="faq-link", className="linkbtn", href="/assets/faq.html",
                            target="_blank", children="FAQ"),
@@ -3371,8 +3636,10 @@ def create_app() -> Dash:
             ], className="toolbar"),
         ], className="topbar"),
 
-        # ---------------------------------------------------------- contenu
-        html.Main([
+        # ---------------------------------------------------------- terminal
+        html.Div([
+            terminal_sidebar(),
+            html.Main([
             dcc.Tabs(id="tab", value="main", className="tabbar", persistence=True,
                      persistence_type="local", children=[
                 dcc.Tab(value=v, label=t("es", f"tab_{v}"), id=f"tabh-{v}",
@@ -3385,7 +3652,7 @@ def create_app() -> Dash:
                     html.Div([html.Span("MARKET MONITOR", className="eyebrow"),
                               html.H1(id="workspace-title", children="Gamma Exposure Desk")],
                              className="workspace-copy"),
-                    html.Div([html.Span("●", className="live-pulse"),
+                    html.Div([html.Span(className="live-pulse", **{"aria-hidden": "true"}),
                               html.Span(id="workspace-status", children="Datos de mercado")],
                              className="workspace-status"),
                 ], className="workspace-head"),
@@ -3393,7 +3660,17 @@ def create_app() -> Dash:
             ], className="workspace-hero"),
 
             html.Div(id="pane-main", className="page-pane", style={"display": "block"}, children=[
-                html.Div(html.Span("Overview", className="section-kicker"), className="section-head"),
+                html.Div(id="terminal-overview-briefing"),
+                html.Div([
+                    html.Span("MARKET MAP", className="section-kicker"),
+                    html.Span("Price, positioning and normalized key levels", className="section-note"),
+                ], className="section-head"),
+                dcc.Graph(id="overview-market-map", config=GRAPH_CONFIG,
+                          figure=empty_fig("Waiting for a market snapshot.", height=620)),
+                html.Div([
+                    html.Span("MARKET SNAPSHOT", className="section-kicker"),
+                    html.Span("Live positioning metrics", className="section-note"),
+                ], className="section-head"),
                 html.Div(id="cards", className="cards"),
                 html.Div(id="pc-gauge"),
                 html.Div(id="regime-banner"),
@@ -3403,29 +3680,94 @@ def create_app() -> Dash:
                     # (cf. tv_levels_string) — la chaîne suit l'échelle affichée
                     dcc.Clipboard(id="tv-copy", className="tv-copy"),
                 ], className="levels-row"),
-                html.Div([html.Span("Strike map", className="section-kicker"), html.Span("Exposure by strike", className="section-note")], className="section-head"),
                 html.Div([
-                    html.Span("SESIÓN DE DATOS", className="ctl-label"),
-                    dcc.Dropdown(id="overlay-day", clearable=False,
-                                 options=init_overlay_options,
-                                 value=init_overlay_val,
-                                 placeholder="Selecciona una sesión con datos",
-                                 style={"width": "220px"}),
-                    html.Span("TEMPORALIDAD", className="ctl-label"),
-                    dcc.RadioItems(
-                        id="overlay-timeframe", className="seg",
-                        options=[
-                            {"label": "1 min", "value": "1m"},
-                            {"label": "5 min", "value": "5m"},
-                            {"label": "1H", "value": "1h"},
-                            {"label": "4H", "value": "4h"},
-                            {"label": "1D", "value": "1d"},
-                            {"label": "2D", "value": "2d"},
-                            {"label": "Todo", "value": "all"},
-                        ],
-                        value="2d", inline=True, persistence=True, persistence_type="local",
-                    ),
-                ], className="daybar"),
+                    html.Span("PRICE & GAMMA MAP", className="section-kicker"),
+                    html.Span("Intraday price, walls and flow", className="section-note"),
+                ], className="section-head"),
+                html.Div([
+                    html.Div([
+                        html.Span("DATA SESSION", className="ctl-label"),
+                        dcc.Dropdown(
+                            id="overlay-day", className="dash-dropdown", clearable=False,
+                            options=init_overlay_options, value=init_overlay_val,
+                            placeholder="Select a saved session",
+                        ),
+                    ], className="chart-command-field chart-command-field--session"),
+                    html.Div([
+                        html.Span("TIMEFRAME", className="ctl-label"),
+                        dcc.Dropdown(
+                            id="overlay-timeframe", className="dash-dropdown", clearable=False,
+                            options=[
+                                {"label": "1 minute", "value": "1m"}, {"label": "5 minutes", "value": "5m"},
+                                {"label": "15 minutes", "value": "15m"}, {"label": "30 minutes", "value": "30m"},
+                                {"label": "1 hour", "value": "1h"}, {"label": "4 hours", "value": "4h"},
+                                {"label": "1 day", "value": "1d"}, {"label": "2 days", "value": "2d"},
+                                {"label": "All data", "value": "all"},
+                            ], value="2d", persistence=True, persistence_type="local",
+                        ),
+                    ], className="chart-command-field chart-command-field--timeframe"),
+                    html.Details([
+                        html.Summary("Chart controls", className="chart-controls-summary"),
+                        html.Div([
+                            html.Div([
+                                html.Span("FLOW", className="ctl-label"),
+                                dcc.Dropdown(
+                                    id="overlay-flow-type", className="dash-dropdown", clearable=False,
+                                    options=[{"label": "All activity", "value": "ALL"}, {"label": "Calls", "value": "CALLS"}, {"label": "Puts", "value": "PUTS"}],
+                                    value="ALL", persistence=True, persistence_type="local",
+                                ),
+                            ], className="chart-control-field"),
+                            html.Div([
+                                html.Span("ORDER SIDE", className="ctl-label"),
+                                dcc.Dropdown(
+                                    id="overlay-flow-side", className="dash-dropdown", clearable=False,
+                                    options=[{"label": "All", "value": "ALL"}, {"label": "Buy", "value": "BUY"}, {"label": "Sell", "value": "SELL"}, {"label": "Unknown", "value": "UNKNOWN"}],
+                                    value="ALL", persistence=True, persistence_type="local",
+                                ),
+                            ], className="chart-control-field"),
+                            html.Div([
+                                html.Span("EXPIRATION", className="ctl-label"),
+                                dcc.Dropdown(
+                                    id="overlay-flow-expiration", className="dash-dropdown", clearable=False,
+                                    options=[
+                                        {"label": "All expirations", "value": "ALL"}, {"label": "0DTE", "value": "0DTE"},
+                                        {"label": "1DTE", "value": "1DTE"}, {"label": "Weekly", "value": "WEEKLY"},
+                                        {"label": "Monthly", "value": "MONTHLY"}, {"label": "Custom date", "value": "CUSTOM"},
+                                    ], value="ALL", persistence=True, persistence_type="local",
+                                ),
+                            ], className="chart-control-field"),
+                            html.Div([
+                                html.Span("CUSTOM EXPIRATION", className="ctl-label"),
+                                dcc.Input(id="overlay-flow-expiration-custom", type="text", placeholder="YYYY-MM-DD", debounce=True,
+                                          persistence=True, persistence_type="local", className="terminal-number-input"),
+                            ], id="overlay-flow-expiration-custom-wrap", className="chart-control-field", style={"display": "none"}),
+                            html.Div([
+                                html.Span("MIN PREMIUM", className="ctl-label"),
+                                dcc.Input(id="overlay-min-premium", type="number", min=0, step=10000, value=0, debounce=True,
+                                          className="terminal-number-input"),
+                            ], className="chart-control-field"),
+                            html.Div([
+                                html.Span("MIN VOLUME", className="ctl-label"),
+                                dcc.Input(id="overlay-min-volume", type="number", min=0, step=1, value=0, debounce=True,
+                                          className="terminal-number-input"),
+                            ], className="chart-control-field"),
+                            html.Div([
+                                html.Span("VISIBLE LAYERS", className="ctl-label"),
+                                dcc.Checklist(
+                                    id="overlay-layers", className="check chart-layer-checklist",
+                                    options=[
+                                        {"label": "Price", "value": "price"}, {"label": "Spot", "value": "spot"},
+                                        {"label": "Call Wall", "value": "call_wall"}, {"label": "Put Wall", "value": "put_wall"},
+                                        {"label": "Gamma Flip", "value": "gamma_flip"}, {"label": "Flow", "value": "flow"},
+                                        {"label": "Badges", "value": "annotations"},
+                                    ],
+                                    value=["price", "spot", "call_wall", "put_wall", "gamma_flip", "flow", "annotations"],
+                                    persistence=True, persistence_type="local",
+                                ),
+                            ], className="chart-control-field chart-control-field--layers"),
+                        ], className="chart-controls-panel"),
+                    ], className="chart-controls-menu"),
+                ], className="daybar chart-command-bar"),
                 html.Div(
                     dcc.Graph(config=GRAPH_CONFIG, id="options-flow-overlay",
                               figure=init_overlay_fig,
@@ -3444,7 +3786,10 @@ def create_app() -> Dash:
                                  style={"width": "160px"}),
                     html.Button(id="flow-today", n_clicks=0, className="btn"),
                 ], className="daybar"),
-                html.Div([html.Span("Flow & positioning", className="section-kicker"), html.Span("Intraday pressure and dealer activity", className="section-note")], className="section-head"),
+                html.Div([
+                    html.Span("FLOW & POSITIONING", className="section-kicker"),
+                    html.Span("Intraday pressure and dealer activity", className="section-note"),
+                ], className="section-head"),
                 dcc.Graph(config=GRAPH_CONFIG, id="flow",
                           figure=empty_fig("Cargando Delta Flow...", height=420),
                           style={"marginBottom": "12px"}),
@@ -3479,12 +3824,147 @@ def create_app() -> Dash:
             ]),
 
             html.Div(id="pane-profile", className="page-pane", style={"display": "none"}, children=[
+                html.Div([
+                    html.Div([
+                        html.Span("EXPIRY", className="ctl-label"),
+                        dcc.RadioItems(
+                            id="profile-expiry", className="seg", inline=True,
+                            options=[
+                                {"label": "All", "value": "Tout"},
+                                {"label": "0DTE", "value": "0DTE"},
+                                {"label": "Week", "value": "Semaine"},
+                                {"label": "Month", "value": "Mois"},
+                            ], value="Tout", persistence=True, persistence_type="local",
+                        ),
+                    ], className="terminal-profile-filter"),
+                    html.Div([
+                        html.Span("SIDE", className="ctl-label"),
+                        dcc.RadioItems(
+                            id="profile-side", className="seg", inline=True,
+                            options=[
+                                {"label": "All", "value": "ALL"},
+                                {"label": "Calls", "value": "CALLS"},
+                                {"label": "Puts", "value": "PUTS"},
+                            ], value="ALL", persistence=True, persistence_type="local",
+                        ),
+                    ], className="terminal-profile-filter"),
+                    html.Div([
+                        html.Span("MODE", className="ctl-label"),
+                        dcc.RadioItems(
+                            id="profile-mode", className="seg", inline=True,
+                            options=[{"label": "Net", "value": "NET"}, {"label": "Absolute", "value": "ABSOLUTE"}],
+                            value="NET", persistence=True, persistence_type="local",
+                        ),
+                    ], className="terminal-profile-filter"),
+                ], className="terminal-profile-filters"),
                 html.Div(id="profile-hint", className="hint"),
                 dcc.Graph(config=GRAPH_CONFIG, id="profile",
                           figure=empty_fig("Cargando Gamma Profile...", height=420),
                           style={"marginBottom": "12px"}),
                 dcc.Graph(config=GRAPH_CONFIG, id="profile-exp",
                           figure=empty_fig("Cargando Perfil por Vencimiento...", height=420)),
+            ]),
+
+            html.Div(id="pane-options", className="page-pane", style={"display": "none"}, children=[
+                html.Div([
+                    html.Div([
+                        html.Span("OPTIONS CHAIN", className="section-kicker"),
+                        html.Span("ATM, walls, open interest and gamma context", className="section-note"),
+                    ], className="section-head"),
+                    html.Div([
+                        html.Div([
+                            html.Span("EXPIRATION", className="ctl-label"),
+                            dcc.Dropdown(id="options-chain-expiration", clearable=False,
+                                         options=[{"label": "All expirations", "value": "ALL"}],
+                                         value="ALL", className="dash-dropdown"),
+                        ], className="terminal-chain-filter"),
+                        html.Div([
+                            html.Span("SIDE", className="ctl-label"),
+                            dcc.RadioItems(
+                                id="options-chain-side", className="seg", inline=True,
+                                options=[
+                                    {"label": "All", "value": "ALL"},
+                                    {"label": "Calls", "value": "CALLS"},
+                                    {"label": "Puts", "value": "PUTS"},
+                                ], value="ALL", persistence=True, persistence_type="local",
+                            ),
+                        ], className="terminal-chain-filter"),
+                        html.Div([
+                            html.Span("STRIKE RANGE %", className="ctl-label"),
+                            dcc.Input(id="options-chain-range", type="number", min=0, max=100,
+                                      step=1, value=5, debounce=True, persistence=True,
+                                      persistence_type="local", className="terminal-number-input"),
+                        ], className="terminal-chain-filter"),
+                        html.Div([
+                            html.Span("MIN VOLUME", className="ctl-label"),
+                            dcc.Input(id="options-chain-min-volume", type="number", min=0, step=1,
+                                      value=0, debounce=True, persistence=True,
+                                      persistence_type="local", className="terminal-number-input"),
+                        ], className="terminal-chain-filter"),
+                        html.Div([
+                            html.Span("MIN OI", className="ctl-label"),
+                            dcc.Input(id="options-chain-min-oi", type="number", min=0, step=1,
+                                      value=0, debounce=True, persistence=True,
+                                      persistence_type="local", className="terminal-number-input"),
+                        ], className="terminal-chain-filter"),
+                        html.Div([
+                            html.Span("MIN |NET GEX|", className="ctl-label"),
+                            dcc.Input(id="options-chain-min-gex", type="number", min=0, step=100000,
+                                      value=0, debounce=True, persistence=True,
+                                      persistence_type="local", className="terminal-number-input"),
+                        ], className="terminal-chain-filter"),
+                        html.Div([
+                            html.Span("MIN |DELTA|", className="ctl-label"),
+                            dcc.Input(id="options-chain-min-delta", type="number", min=0, max=1,
+                                      step=0.05, value=0, debounce=True, persistence=True,
+                                      persistence_type="local", className="terminal-number-input"),
+                        ], className="terminal-chain-filter"),
+                    ], className="terminal-chain-filters"),
+                ]),
+                html.Div(id="options-chain-table"),
+            ]),
+
+            html.Div(id="pane-map", className="page-pane", style={"display": "none"}, children=[
+                html.Div([
+                    html.Span("MARKET MAP", className="section-kicker"),
+                    html.Span("Call and put gamma exposure by strike with normalized key levels", className="section-note"),
+                ], className="section-head"),
+                dcc.Graph(id="market-map-chart", config=GRAPH_CONFIG,
+                          figure=empty_fig("Waiting for a market snapshot.", height=620)),
+            ]),
+
+            html.Div(id="pane-levels", className="page-pane", style={"display": "none"}, children=[
+                html.Div([
+                    html.Span("UNIFIED LEVELS", className="section-kicker"),
+                    html.Span("Source, session, strength and live relationship to spot", className="section-note"),
+                ], className="section-head"),
+                html.Div([
+                    html.Div([
+                        html.Span("TYPE", className="ctl-label"),
+                        dcc.Dropdown(id="level-filter-type", className="dash-dropdown", multi=True,
+                                     options=[{"label": item.value.replace("_", " "), "value": item.value} for item in LevelType],
+                                     placeholder="All types"),
+                    ], className="terminal-level-filter"),
+                    html.Div([
+                        html.Span("SOURCE", className="ctl-label"),
+                        dcc.Dropdown(id="level-filter-source", className="dash-dropdown", multi=True,
+                                     options=[{"label": item.value.replace("_", " "), "value": item.value} for item in LevelSource],
+                                     placeholder="All sources"),
+                    ], className="terminal-level-filter"),
+                    html.Div([
+                        html.Span("SESSION", className="ctl-label"),
+                        dcc.Dropdown(id="level-filter-session", className="dash-dropdown", multi=True,
+                                     options=[{"label": item.value, "value": item.value} for item in SessionType],
+                                     placeholder="All sessions"),
+                    ], className="terminal-level-filter"),
+                ], className="terminal-level-filters"),
+                dcc.Graph(id="unified-level-map", config=GRAPH_CONFIG,
+                          figure=empty_fig("Waiting for unified levels.", height=500)),
+                html.Div(id="unified-level-table"),
+            ]),
+
+            html.Div(id="pane-scenarios", className="page-pane", style={"display": "none"}, children=[
+                html.Div(id="terminal-scenarios-page"),
             ]),
 
             html.Div(id="pane-greeks2", className="page-pane", style={"display": "none"}, children=[
@@ -3500,17 +3980,20 @@ def create_app() -> Dash:
 
             html.Div(id="pane-heat", className="page-pane", style={"display": "none"}, children=[
                 html.Div([
-                    dcc.RadioItems(
-                        id="heat-sub", className="seg heat-seg",
-                        options=[
-                            {"label": "Matriz Intradiaria (Tiempo)", "value": "intraday"},
-                            {"label": "Burbujas de Contratos (Flow)", "value": "bubbles"},
-                            {"label": "Estructura Temporal (Vencimientos)", "value": "term"},
-                            {"label": "Historico Multi-Dia (GEX & Muros)", "value": "hist"},
-                            {"label": "Perfil GEX & Precio", "value": "overlay"},
-                        ],
-                        value="intraday", inline=True,
-                    ),
+                    html.Div([
+                        html.Span("VIEW", className="ctl-label"),
+                        dcc.Dropdown(
+                            id="heat-sub", className="dash-dropdown heat-view-picker", clearable=False,
+                            options=[
+                                {"label": "Intraday liquidity", "value": "intraday"},
+                                {"label": "Options flow bubbles", "value": "bubbles"},
+                                {"label": "Expiry structure", "value": "term"},
+                                {"label": "Multi-day history", "value": "hist"},
+                                {"label": "GEX & price profile", "value": "overlay"},
+                            ],
+                            value="intraday", persistence=True, persistence_type="local",
+                        ),
+                    ], className="heat-view-control"),
                 ], className="daybar heat-bar"),
                 html.Div([
                     html.Div([
@@ -3665,6 +4148,144 @@ def create_app() -> Dash:
                 ]),
             ]),
 
+            html.Div(id="pane-report", className="page-pane", style={"display": "none"}, children=[
+                html.Div(id="terminal-market-report"),
+            ]),
+
+            html.Div(id="pane-history", className="page-pane", style={"display": "none"}, children=[
+                html.Div([
+                    html.Span("LEVEL HISTORY", className="section-kicker"),
+                    html.Span("Observed snapshot evolution; no inferred paths", className="section-note"),
+                ], className="section-head"),
+                html.Div([
+                    html.Span("SESSION", className="ctl-label"),
+                    dcc.Dropdown(id="level-history-day", clearable=False,
+                                 options=[], className="dash-dropdown", style={"width": "200px"}),
+                    html.Span("LEVEL TYPE", className="ctl-label"),
+                    dcc.Dropdown(
+                        id="level-history-types", className="dash-dropdown", multi=True,
+                        options=[{"label": item.value.replace("_", " "), "value": item.value} for item in LevelType],
+                        placeholder="All level types", style={"width": "260px"},
+                    ),
+                ], className="daybar"),
+                dcc.Graph(id="level-history-chart", config=GRAPH_CONFIG,
+                          figure=empty_fig("Select a session with saved snapshots.", height=560)),
+            ]),
+
+            html.Div(id="pane-diagnostics", className="page-pane", style={"display": "none"}, children=[
+                html.Div(id="terminal-diagnostics"),
+            ]),
+
+            html.Div(id="pane-session", className="page-pane", style={"display": "none"}, children=[
+                html.Div(id="terminal-session-profile"),
+            ]),
+
+            html.Div(id="pane-settings", className="page-pane", style={"display": "none"}, children=[
+                html.Div([
+                    html.Span("SETTINGS", className="section-kicker"),
+                    html.Span("Terminal preferences", className="section-note"),
+                ], className="section-head"),
+                html.Div([
+                    html.Section([
+                        html.H3("Market context"),
+                        html.Label("Underlying", htmlFor="settings-underlying"),
+                        dcc.Dropdown(id="settings-underlying", className="dash-dropdown", clearable=False,
+                                     options=[{"label": u.label, "value": u.key} for u in enabled], value=init_sym,
+                                     persistence=True, persistence_type="local"),
+                        html.Label("Display timezone", htmlFor="settings-display-timezone"),
+                        dcc.Dropdown(
+                            id="settings-display-timezone", className="dash-dropdown", clearable=False,
+                            options=[
+                                {"label": "New York (ET)", "value": "America/New_York"},
+                                {"label": "Bogota (COT)", "value": "America/Bogota"},
+                                {"label": "UTC", "value": "UTC"},
+                            ], value="America/New_York", persistence=True, persistence_type="local",
+                        ),
+                        html.Label("Analysis expiration", htmlFor="settings-expiry-bucket"),
+                        dcc.RadioItems(
+                            id="settings-expiry-bucket", className="seg", inline=True,
+                            options=[
+                                {"label": "0DTE", "value": "0DTE"},
+                                {"label": "Week", "value": "Semaine"},
+                                {"label": "Month", "value": "Mois"},
+                                {"label": "All", "value": "Tout"},
+                            ],
+                            value="Tout", persistence=True, persistence_type="local",
+                        ),
+                        html.Label("Market map window", htmlFor="settings-map-window"),
+                        dcc.RadioItems(id="settings-map-window", className="seg", inline=True,
+                                       options=[{"label": "±1%", "value": 1.0}, {"label": "±3%", "value": 3.0},
+                                                {"label": "±5%", "value": 5.0}], value=3.0,
+                                       persistence=True, persistence_type="local"),
+                        html.Label("Neutral gamma threshold", htmlFor="settings-neutral-gex"),
+                        dcc.Input(id="settings-neutral-gex", type="number", min=0, step=1_000_000,
+                                  value=0, className="cfd-input", debounce=True,
+                                  persistence=True, persistence_type="local"),
+                        html.Label("Minimum wall strength", htmlFor="settings-wall-min-strength"),
+                        dcc.RadioItems(
+                            id="settings-wall-min-strength", className="seg", inline=True,
+                            options=[{"label": "All", "value": 0}, {"label": "60+", "value": 60},
+                                     {"label": "75+", "value": 75}, {"label": "90+", "value": 90}],
+                            value=0, persistence=True, persistence_type="local",
+                        ),
+                    ], className="terminal-settings-section"),
+                    html.Section([
+                        html.H3("Update & scenarios"),
+                        html.Label("Update interval", htmlFor="settings-update-seconds"),
+                        dcc.RadioItems(id="settings-update-seconds", className="seg", inline=True,
+                                       options=[{"label": "3s", "value": 3}, {"label": "5s", "value": 5},
+                                                {"label": "10s", "value": 10}, {"label": "30s", "value": 30}],
+                                       value=10, persistence=True, persistence_type="local"),
+                        html.Label("Scenario limit", htmlFor="settings-scenario-limit"),
+                        dcc.RadioItems(id="settings-scenario-limit", className="seg", inline=True,
+                                       options=[{"label": "3", "value": 3}, {"label": "5", "value": 5},
+                                                {"label": "8", "value": 8}], value=5,
+                                       persistence=True, persistence_type="local"),
+                        html.Label("Session value area", htmlFor="settings-value-area"),
+                        dcc.RadioItems(id="settings-value-area", className="seg", inline=True,
+                                       options=[{"label": "68%", "value": 0.68}, {"label": "70%", "value": 0.70},
+                                                {"label": "80%", "value": 0.80}], value=0.70,
+                                       persistence=True, persistence_type="local"),
+                    ], className="terminal-settings-section"),
+                    html.Section([
+                        html.H3("Alerts"),
+                        html.Label("Market alerts", htmlFor="settings-alerts-enabled"),
+                        dcc.Checklist(
+                            id="settings-alerts-enabled", className="check",
+                            options=[{"label": "Enable meaningful market events", "value": "enabled"}],
+                            value=[], persistence=True, persistence_type="local",
+                        ),
+                        html.Label("Strength change threshold", htmlFor="settings-alert-strength"),
+                        dcc.Input(id="settings-alert-strength", type="number", min=1, max=100, step=1,
+                                  value=15, debounce=True, persistence=True,
+                                  persistence_type="local", className="terminal-number-input"),
+                    ], className="terminal-settings-section"),
+                    html.Section([
+                        html.H3("Levels & appearance"),
+                        html.Label("Visible level sources", htmlFor="settings-level-sources"),
+                        dcc.Checklist(
+                            id="settings-level-sources", className="check terminal-level-source-settings",
+                            options=[
+                                {"label": source.value.replace("_", " "), "value": source.value}
+                                for source in LevelSource
+                            ],
+                            value=[source.value for source in LevelSource],
+                            persistence=True, persistence_type="local",
+                        ),
+                        html.Label("Terminal accent", htmlFor="settings-terminal-accent"),
+                        dcc.RadioItems(
+                            id="settings-terminal-accent", className="terminal-accent-options", inline=True,
+                            options=[
+                                {"label": html.Span([html.Span(className="terminal-color-swatch terminal-color-swatch--blue"), " Blue"]), "value": "blue"},
+                                {"label": html.Span([html.Span(className="terminal-color-swatch terminal-color-swatch--teal"), " Teal"]), "value": "teal"},
+                                {"label": html.Span([html.Span(className="terminal-color-swatch terminal-color-swatch--gold"), " Gold"]), "value": "gold"},
+                            ],
+                            value="blue", persistence=True, persistence_type="local",
+                        ),
+                    ], className="terminal-settings-section"),
+                ], className="terminal-settings-grid"),
+            ]),
+
             dcc.Interval(id="tick", interval=10000),
             # le Tape doit défiler vivant, cadence 1s
             dcc.Interval(id="tape-tick", interval=1000),
@@ -3679,7 +4300,11 @@ def create_app() -> Dash:
             dcc.Store(id="cfd-active-offset", data=0.0),
             dcc.Store(id="cfd-modal-calc-diff-store", data=0.0),
             html.Div(id="footer", className="footer"),
-        ], className="app-shell"),
+            ], className="app-shell terminal-main"),
+            terminal_intelligence_panel(),
+        ], id="terminal-frame", className="terminal-frame"),
+        terminal_statusbar(),
+        dcc.Store(id="terminal-sidebar-state", data={"collapsed": False}, storage_type="local"),
         dcc.Store(id="native-alt"),  # "NDX" ou "SPY" : cible du bouton OK
         html.Div(id="native-overlay", className="native-overlay", style={"display": "none"}),
         # Modal Calculadora CFD
@@ -4280,14 +4905,19 @@ def create_app() -> Dash:
         hvl = metrics.zero_gamma(df, snap.spot, weight_col="volume")
         keys = _res["keys"]
         scale_title_str = f"{unit} | CFD {cfd_off:+.1f}" if abs(cfd_off) > 1e-6 else unit
+        
+        # CORRECCIÓN: Usar spot en tiempo real en lugar de snap.spot para evitar discrepancias
+        current_live_spot, is_live = live_spot(symbol, snap.spot)
+        correct_spot = current_live_spot if is_live and current_live_spot > 0 else snap.spot
+        
         return (
             levels_strip(levels, lang, hvl, zg, xf, note, keys),
-            _pin(exposure_fig(sel, snap.spot, zg, "gex",
+            _pin(exposure_fig(sel, correct_spot, zg, "gex",
                               guided(t(lang, "gex_title", bucket=bucket_label), "gex_strike"), lang,
                               levels=levels, hvl=hvl, window=window, xf=xf,
                               keys=keys,
                               relayout=gex_effective_relayout), rev),
-            _pin(exposure_fig(sel, snap.spot, zg, "dex",
+            _pin(exposure_fig(sel, correct_spot, zg, "dex",
                               guided(t(lang, "dex_title", bucket=bucket_label), "dex_strike"), lang,
                               hvl=hvl, window=window, xf=xf, keys=keys,
                               level_set="regime",
@@ -4325,12 +4955,18 @@ def create_app() -> Dash:
         [Input("rt-tick", "n_intervals"), Input("symbol", "value"),
          Input("overlay-day", "value"), Input("bucket", "value"), Input("window", "value"), Input("unit", "value"),
          Input("overlay-timeframe", "value"),
+         Input("overlay-flow-type", "value"), Input("overlay-min-premium", "value"),
+         Input("overlay-min-volume", "value"),
+         Input("overlay-flow-side", "value"), Input("overlay-flow-expiration", "value"),
+         Input("overlay-flow-expiration-custom", "value"),
+         Input("overlay-layers", "value"),
          Input("cfd-active-offset", "data")],
         [State("options-flow-overlay", "relayoutData"),
          State("options-flow-overlay", "figure")],
     )
     def refresh_options_overlay(
-        _, symbol, day, bucket, window, unit, timeframe, cfd_offset,
+        _, symbol, day, bucket, window, unit, timeframe, flow_type, min_premium, min_volume,
+        flow_side, flow_expiration, custom_expiration, overlay_layers, cfd_offset,
         relayout_data, current_figure,
     ):
         """Refresh only the primary price/GEX view at the real-time cadence."""
@@ -4386,10 +5022,25 @@ def create_app() -> Dash:
 
         cfd_off = float(cfd_offset or 0.0)
         xf, _, _ = _transform_for(symbol, unit, cfd_offset=cfd_off)
+        price_bars, previous_bars = overlay_price_series(symbol, day, timeframe or "2d")
+        layer_flags = overlay_layer_flags(overlay_layers)
         if chain is None or not current_spot:
-            return build_options_overlay(
-                symbol, None, None, None, None, day, window,
-                relayout=effective_relayout, timeframe=timeframe or "2d",
+            return build_options_overlay_from_view_model(
+                OptionsOverlayViewModel(
+                    symbol=symbol,
+                    price_series=price_bars,
+                    previous_price_series=previous_bars,
+                    current_price=None,
+                    chain=None,
+                    gamma_flip=None,
+                    keys={},
+                    day=day,
+                    window=window,
+                ),
+                transform=xf,
+                **layer_flags,
+                relayout=effective_relayout,
+                timeframe=timeframe or "2d",
             )
 
         ref = store.previous_close_spot(symbol, day=day) or base_spot
@@ -4398,15 +5049,38 @@ def create_app() -> Dash:
         side_spot = current_spot if (not is_live_session or market_is_open()) else ref
         level_result = metrics.compute_levels(chain, ref, side_spot, bucket=bucket)
         gamma_flip = metrics.zero_gamma(chain, ref)
+        gex_levels = build_gex_levels(chain, current_spot, gamma_flip, level_result["keys"])
         snapshot_symbol = scheduler_native_key(symbol) if symbol in ("NQ", "ES") else symbol
         snapshots = store.load_day_snapshots(snapshot_symbol, day)
         if not snapshots and symbol in ("NQ", "ES"):
             fallback_key = "NDX" if symbol == "NQ" else "SPX"
             snapshots = store.load_day_snapshots(fallback_key, day)
+        flow_bubbles = (
+            overlay_flow_bubbles(
+                symbol, current_spot, min_premium, min_volume, flow_type,
+                flow_side, overlay_expiration_filter(flow_expiration, custom_expiration), window,
+            )
+            if is_live_session else []
+        )
 
-        fig = build_options_overlay(
-            symbol, chain, current_spot, gamma_flip, level_result["keys"],
-            day, window, transform=xf, snapshots=snapshots, relayout=effective_relayout,
+        fig = build_options_overlay_from_view_model(
+            OptionsOverlayViewModel(
+                symbol=symbol,
+                price_series=price_bars,
+                previous_price_series=previous_bars,
+                current_price=current_spot,
+                chain=chain,
+                gamma_flip=gamma_flip,
+                keys=level_result["keys"],
+                day=day,
+                window=window,
+                gex_levels=gex_levels,
+                flow_bubbles=flow_bubbles,
+                snapshots=snapshots,
+            ),
+            transform=xf,
+            **layer_flags,
+            relayout=effective_relayout,
             timeframe=timeframe or "2d",
         )
         fig.update_layout(
@@ -4415,23 +5089,444 @@ def create_app() -> Dash:
         return fig
 
     @app.callback(
+        Output("overlay-flow-expiration-custom-wrap", "style"),
+        Input("overlay-flow-expiration", "value"),
+    )
+    def toggle_custom_overlay_expiration(expiration):
+        return {} if expiration == "CUSTOM" else {"display": "none"}
+
+    @app.callback(
+        Output("tab", "value"),
+        [Input({"type": "terminal-nav-link", "page": ALL}, "n_clicks"),
+         Input("terminal-settings-shortcut", "n_clicks")],
+        prevent_initial_call=True,
+    )
+    def navigate_terminal(_, __):
+        """Navigate from the categorized keyboard-accessible terminal links."""
+        triggered = ctx.triggered_id
+        if triggered == "terminal-settings-shortcut":
+            return "settings"
+        if not isinstance(triggered, dict):
+            raise PreventUpdate
+        page = str(triggered.get("page", ""))
+        if page not in TABS:
+            raise PreventUpdate
+        return page
+
+    @app.callback(
+        Output({"type": "terminal-nav-link", "page": ALL}, "className"),
+        Input("tab", "value"),
+    )
+    def highlight_active_terminal_navigation(page):
+        """Keep sidebar state aligned with both sidebar and tab navigation."""
+        return [
+            "terminal-nav-item terminal-nav-item--active"
+            if value == page
+            else "terminal-nav-item"
+            for value in terminal_navigation_pages()
+        ]
+
+    @app.callback(
+        Output("terminal-sidebar-state", "data"),
+        Input("terminal-sidebar-toggle", "n_clicks"),
+        State("terminal-sidebar-state", "data"),
+        prevent_initial_call=True,
+    )
+    def toggle_terminal_sidebar(_, current):
+        return {"collapsed": not bool((current or {}).get("collapsed", False))}
+
+    @app.callback(
+        Output("terminal-frame", "className"),
+        Input("terminal-sidebar-state", "data"),
+    )
+    def apply_terminal_sidebar_state(current):
+        return "terminal-frame terminal-frame--collapsed" if (current or {}).get("collapsed") else "terminal-frame"
+
+    @app.callback(
+        Output("terminal-frame", "style"),
+        Input("settings-terminal-accent", "value"),
+    )
+    def apply_terminal_accent(accent):
+        return terminal_accent_style(accent)
+
+    @app.callback(
+        Output("symbol", "value", allow_duplicate=True),
+        Input("settings-underlying", "value"),
+        prevent_initial_call=True,
+    )
+    def apply_settings_underlying(symbol):
+        return symbol
+
+    @app.callback(
+        Output("bucket", "value", allow_duplicate=True),
+        Input("settings-expiry-bucket", "value"),
+        prevent_initial_call=True,
+    )
+    def apply_settings_expiry_bucket(bucket):
+        return bucket if bucket in EXPIRY_BUCKETS else "Tout"
+
+    @app.callback(
+        [Output("tick", "interval"), Output("rt-tick", "interval")],
+        Input("settings-update-seconds", "value"),
+    )
+    def apply_update_interval(seconds):
+        interval_ms = max(int(seconds or 10), 3) * 1000
+        return interval_ms, interval_ms
+
+    @app.callback(
+        [Output("terminal-market-state", "children"),
+         Output("terminal-key-levels", "children"),
+         Output("terminal-scenarios", "children"),
+         Output("terminal-data-status", "children"),
+         Output("terminal-status-symbol", "children"),
+         Output("terminal-status-session", "children"),
+         Output("terminal-status-timestamp", "children"),
+         Output("workspace-summary", "children"),
+         Output("terminal-market-report", "children"),
+         Output("terminal-topbar-price", "children"),
+         Output("terminal-topbar-change", "children"),
+         Output("terminal-topbar-session", "children"),
+         Output("terminal-topbar-expiry", "children"),
+         Output("terminal-topbar-data", "children"),
+         Output("terminal-topbar-updated", "children")],
+        [Input("rt-tick", "n_intervals"), Input("symbol", "value"),
+         Input("bucket", "value"), Input("settings-neutral-gex", "value"),
+         Input("settings-scenario-limit", "value"), Input("settings-value-area", "value"),
+         Input("settings-level-sources", "value"), Input("settings-wall-min-strength", "value"),
+         Input("settings-display-timezone", "value")],
+    )
+    def refresh_terminal_intelligence(_, symbol, bucket, neutral_gex, scenario_limit, value_area, visible_sources, wall_min_strength, display_timezone):
+        """Present the API's unified market snapshot without UI-side math."""
+        snapshot = _market_intelligence(
+            symbol,
+            bucket,
+            config=MarketIntelligenceConfig(
+                neutral_gex_threshold=max(float(neutral_gex or 0), 0.0),
+                max_scenarios=max(int(scenario_limit or 5), 0),
+            ),
+            session_config=SessionProfileConfig(value_area_fraction=float(value_area or 0.70)),
+            level_config=LevelBuildConfig(min_wall_strength=max(min(int(wall_min_strength or 0), 100), 0)),
+        )
+        allowed_sources = set(visible_sources) if visible_sources is not None else {
+            source.value for source in LevelSource
+        }
+        visible_levels = filter_levels(snapshot, sources=allowed_sources or {"__HIDDEN__"})
+        return (
+            *intelligence_view(snapshot, visible_levels, display_timezone),
+            market_report_view(snapshot, display_timezone),
+            *topbar_market_view(snapshot, bucket, display_timezone),
+        )
+
+    @app.callback(
+        [Output("terminal-overview-briefing", "children"), Output("overview-market-map", "figure")],
+        [Input("tab", "value"), Input("rt-tick", "n_intervals"), Input("symbol", "value"),
+         Input("bucket", "value"), Input("settings-map-window", "value"),
+         Input("settings-neutral-gex", "value"), Input("settings-scenario-limit", "value"),
+         Input("settings-value-area", "value"), Input("settings-level-sources", "value"),
+         Input("settings-wall-min-strength", "value"), Input("settings-display-timezone", "value")],
+    )
+    def refresh_overview(tab, _, symbol, bucket, map_window, neutral_gex, scenario_limit, value_area, visible_sources, wall_min_strength, display_timezone):
+        if tab != "main":
+            raise PreventUpdate
+        snapshot = _market_intelligence(
+            symbol,
+            bucket,
+            config=MarketIntelligenceConfig(
+                neutral_gex_threshold=max(float(neutral_gex or 0), 0.0),
+                max_scenarios=max(int(scenario_limit or 5), 0),
+            ),
+            session_config=SessionProfileConfig(value_area_fraction=float(value_area or 0.70)),
+            level_config=LevelBuildConfig(min_wall_strength=max(min(int(wall_min_strength or 0), 100), 0)),
+        )
+        return overview_briefing_view(snapshot, display_timezone), _market_map_figure_for_display(
+            symbol,
+            bucket,
+            map_window=float(map_window or 3.0),
+            neutral_gex=float(neutral_gex or 0),
+            scenario_limit=int(scenario_limit or 5),
+            value_area=float(value_area or 0.70),
+            visible_sources=visible_sources,
+            wall_min_strength=int(wall_min_strength or 0),
+        )
+
+    @app.callback(
+        Output("terminal-scenarios-page", "children"),
+        [Input("tab", "value"), Input("rt-tick", "n_intervals"), Input("symbol", "value"),
+         Input("bucket", "value"), Input("settings-neutral-gex", "value"),
+         Input("settings-scenario-limit", "value"), Input("settings-value-area", "value"),
+         Input("settings-wall-min-strength", "value"), Input("settings-display-timezone", "value")],
+    )
+    def refresh_scenarios_page(tab, _, symbol, bucket, neutral_gex, scenario_limit, value_area, wall_min_strength, display_timezone):
+        if tab != "scenarios":
+            raise PreventUpdate
+        snapshot = _market_intelligence(
+            symbol,
+            bucket,
+            config=MarketIntelligenceConfig(
+                neutral_gex_threshold=max(float(neutral_gex or 0), 0.0),
+                max_scenarios=max(int(scenario_limit or 5), 0),
+            ),
+            session_config=SessionProfileConfig(value_area_fraction=float(value_area or 0.70)),
+            level_config=LevelBuildConfig(min_wall_strength=max(min(int(wall_min_strength or 0), 100), 0)),
+        )
+        return scenarios_view(snapshot, display_timezone)
+
+    @app.callback(
+        [Output("terminal-alerts", "children"), Output("terminal-alert-state", "data")],
+        [Input("rt-tick", "n_intervals"), Input("symbol", "value"), Input("bucket", "value"),
+         Input("settings-alerts-enabled", "value"), Input("settings-alert-strength", "value"),
+         Input("settings-neutral-gex", "value"), Input("settings-wall-min-strength", "value")],
+        State("terminal-alert-state", "data"),
+    )
+    def refresh_terminal_alerts(_, symbol, bucket, enabled_values, strength_threshold, neutral_gex, wall_min_strength, prior_state):
+        """Keep alerts opt-in and preserve only monitor-emitted events for this browser."""
+        nonlocal alert_monitor, alert_monitor_threshold
+        enabled_alerts = "enabled" in (enabled_values or [])
+        symbol = str(symbol or "").upper()
+        if not enabled_alerts:
+            alert_monitor.reset(symbol)
+            return alerts_view((), enabled=False), {"enabled": False, "events": []}
+
+        threshold = max(int(strength_threshold or 15), 1)
+        if alert_monitor_threshold != threshold:
+            alert_monitor = AlertMonitor(AlertConfig(strength_change_threshold=threshold))
+            alert_monitor_threshold = threshold
+        snapshot = _market_intelligence(
+            symbol,
+            bucket,
+            config=MarketIntelligenceConfig(neutral_gex_threshold=max(float(neutral_gex or 0), 0.0)),
+            level_config=LevelBuildConfig(min_wall_strength=max(min(int(wall_min_strength or 0), 100), 0)),
+        )
+        existing = prior_state.get("events", []) if isinstance(prior_state, dict) else []
+        history = [event for event in existing if event.get("symbol") == symbol] if isinstance(existing, list) else []
+        if snapshot is None:
+            return alerts_view(history, enabled=True), {"enabled": True, "events": history}
+        emitted = [alert.to_dict() for alert in alert_monitor.observe(snapshot)]
+        history = (emitted + history)[:8]
+        return alerts_view(history, enabled=True), {"enabled": True, "events": history}
+
+    @app.callback(
+        [Output("options-chain-expiration", "options"), Output("options-chain-expiration", "value")],
+        [Input("tick", "n_intervals"), Input("symbol", "value")],
+        State("options-chain-expiration", "value"),
+    )
+    def refresh_options_chain_expirations(_, symbol, selected):
+        state = chain_state(symbol)
+        with STATE.lock:
+            chain = state.enriched
+        expirations = available_expirations(chain)
+        options = [{"label": "All expirations", "value": "ALL"}] + [
+            {"label": expiration, "value": expiration}
+            for expiration in expirations
+        ]
+        return options, selected if selected in {item["value"] for item in options} else "ALL"
+
+    @app.callback(
+        Output("options-chain-table", "children"),
+        [Input("tick", "n_intervals"), Input("tab", "value"), Input("symbol", "value"),
+         Input("options-chain-expiration", "value"), Input("options-chain-side", "value"),
+         Input("options-chain-range", "value"), Input("options-chain-min-volume", "value"),
+         Input("options-chain-min-oi", "value"), Input("options-chain-min-gex", "value"),
+         Input("options-chain-min-delta", "value"), Input("settings-wall-min-strength", "value")],
+    )
+    def refresh_options_chain(_, tab, symbol, expiration, side, strike_range, min_volume, min_oi,
+                              min_gex, min_delta, wall_min_strength):
+        if tab != "options":
+            raise PreventUpdate
+        state = chain_state(symbol)
+        with STATE.lock:
+            chain, summary = state.enriched, state.summary
+        if chain is None or summary is None:
+            return options_chain_view(None)
+        snapshot = _market_intelligence(
+            symbol, "Tout",
+            level_config=LevelBuildConfig(min_wall_strength=max(min(int(wall_min_strength or 0), 100), 0)),
+        )
+        payload = build_options_chain_payload(
+            chain=valid_option_records(chain),
+            spot=summary.spot,
+            levels=snapshot.report.key_levels if snapshot is not None else (),
+            config=OptionsChainConfig(
+                expiration=None if expiration == "ALL" else expiration,
+                strike_range_pct=max(float(strike_range or 0), 0.0),
+                side=side or "ALL",
+                min_volume=max(float(min_volume or 0), 0.0),
+                min_open_interest=max(float(min_oi or 0), 0.0),
+                min_abs_net_gex=max(float(min_gex or 0), 0.0),
+                min_abs_delta=max(float(min_delta or 0), 0.0),
+            ),
+        )
+        return options_chain_view(payload)
+
+    @app.callback(
+        [Output("level-history-day", "options"), Output("level-history-day", "value")],
+        [Input("tick", "n_intervals"), Input("symbol", "value")],
+        State("level-history-day", "value"),
+    )
+    def refresh_level_history_days(_, symbol, selected):
+        preferred = scheduler_native_key(symbol)
+        days = store.snapshot_days(preferred) or store.snapshot_days(symbol)
+        options = [{"label": day, "value": day} for day in reversed(days)]
+        valid = {item["value"] for item in options}
+        return options, selected if selected in valid else (options[0]["value"] if options else None)
+
+    @app.callback(
+        Output("level-history-chart", "figure"),
+        [Input("tab", "value"), Input("symbol", "value"), Input("level-history-day", "value"),
+         Input("bucket", "value"), Input("level-history-types", "value")],
+    )
+    def refresh_level_history(tab, symbol, day, bucket, level_types):
+        if tab != "history":
+            raise PreventUpdate
+        return build_level_history_figure(
+            _market_level_history_payload(symbol, day, bucket), level_types=level_types,
+        )
+
+    @app.callback(
+        Output("terminal-diagnostics", "children"),
+        [Input("tab", "value"), Input("tick", "n_intervals")],
+    )
+    def refresh_diagnostics(tab, _):
+        if tab != "diagnostics":
+            raise PreventUpdate
+        return diagnostics_view(_market_diagnostics_payload())
+
+    @app.callback(
+        Output("terminal-session-profile", "children"),
+        [Input("tab", "value"), Input("tick", "n_intervals"), Input("symbol", "value"),
+         Input("settings-value-area", "value")],
+    )
+    def refresh_session_profile(tab, _, symbol, value_area):
+        if tab != "session":
+            raise PreventUpdate
+        return session_profile_view(_market_session_payload(
+            symbol,
+            config=SessionProfileConfig(value_area_fraction=float(value_area or 0.70)),
+        ))
+
+    @app.callback(
+        Output("market-map-chart", "figure"),
+        [Input("tab", "value"), Input("rt-tick", "n_intervals"), Input("symbol", "value"),
+         Input("bucket", "value"), Input("settings-map-window", "value"),
+         Input("settings-neutral-gex", "value"), Input("settings-scenario-limit", "value"),
+         Input("settings-value-area", "value"), Input("settings-level-sources", "value"),
+         Input("settings-wall-min-strength", "value")],
+    )
+    def refresh_market_map(tab, _, symbol, bucket, map_window, neutral_gex, scenario_limit, value_area, visible_sources, wall_min_strength):
+        if tab != "map":
+            raise PreventUpdate
+        return _market_map_figure_for_display(
+            symbol,
+            bucket,
+            map_window=float(map_window or 3.0),
+            neutral_gex=float(neutral_gex or 0),
+            scenario_limit=int(scenario_limit or 5),
+            value_area=float(value_area or 0.70),
+            visible_sources=visible_sources,
+            wall_min_strength=int(wall_min_strength or 0),
+        )
+
+    @app.callback(
+        [Output("unified-level-map", "figure"), Output("unified-level-table", "children")],
+        [Input("tab", "value"), Input("rt-tick", "n_intervals"), Input("symbol", "value"),
+         Input("bucket", "value"), Input("settings-neutral-gex", "value"),
+         Input("settings-scenario-limit", "value"), Input("settings-value-area", "value"),
+         Input("level-filter-type", "value"), Input("level-filter-source", "value"),
+         Input("level-filter-session", "value"), Input("settings-level-sources", "value"),
+         Input("settings-wall-min-strength", "value")],
+    )
+    def refresh_unified_levels(tab, _, symbol, bucket, neutral_gex, scenario_limit, value_area,
+                               level_types, sources, sessions, visible_sources, wall_min_strength):
+        if tab != "levels":
+            raise PreventUpdate
+        snapshot = _market_intelligence(
+            symbol, bucket,
+            config=MarketIntelligenceConfig(
+                neutral_gex_threshold=max(float(neutral_gex or 0), 0.0),
+                max_scenarios=max(int(scenario_limit or 5), 0),
+            ),
+            session_config=SessionProfileConfig(value_area_fraction=float(value_area or 0.70)),
+            level_config=LevelBuildConfig(min_wall_strength=max(min(int(wall_min_strength or 0), 100), 0)),
+        )
+        source_set = set(visible_sources) if visible_sources is not None else {
+            source.value for source in LevelSource
+        }
+        selected_sources = set(sources or ())
+        selected_sources = selected_sources & source_set if selected_sources else source_set
+        visible_levels = filter_levels(
+            snapshot, level_types=level_types, sources=selected_sources or {"__HIDDEN__"}, sessions=sessions,
+        )
+        return build_level_map_figure(snapshot, visible_levels), levels_view(snapshot, visible_levels)
+
+    @app.callback(
+        Output("terminal-level-inspector", "children"),
+        [Input({"type": "terminal-level", "level": ALL}, "n_clicks"),
+         Input({"type": "terminal-level-page", "level": ALL}, "n_clicks")],
+        [State("symbol", "value"), State("bucket", "value"), State("settings-wall-min-strength", "value")],
+        prevent_initial_call=True,
+    )
+    def inspect_terminal_level(_, __, symbol, bucket, wall_min_strength):
+        triggered = ctx.triggered_id
+        if not isinstance(triggered, dict):
+            raise PreventUpdate
+        snapshot = _market_intelligence(
+            symbol, bucket,
+            level_config=LevelBuildConfig(min_wall_strength=max(min(int(wall_min_strength or 0), 100), 0)),
+        )
+        if snapshot is None:
+            return level_inspector_view(None)
+        level_id = str(triggered.get("level", ""))
+        selected = next((level for level in snapshot.report.key_levels if level.id == level_id), None)
+        if selected is None:
+            return level_inspector_view(None)
+        return level_inspector_view(build_level_inspector_payload(
+            level=selected,
+            spot=snapshot.state.spot,
+            related_levels=snapshot.report.key_levels,
+            scenarios=snapshot.scenarios,
+        ))
+
+    @app.callback(
+        Output("terminal-scenario-inspector", "children"),
+        Input({"type": "terminal-scenario", "scenario": ALL}, "n_clicks"),
+        [State("symbol", "value"), State("bucket", "value"), State("settings-wall-min-strength", "value")],
+        prevent_initial_call=True,
+    )
+    def inspect_terminal_scenario(_, symbol, bucket, wall_min_strength):
+        triggered = ctx.triggered_id
+        if not isinstance(triggered, dict):
+            raise PreventUpdate
+        snapshot = _market_intelligence(
+            symbol, bucket,
+            level_config=LevelBuildConfig(min_wall_strength=max(min(int(wall_min_strength or 0), 100), 0)),
+        )
+        if snapshot is None:
+            return scenario_inspector_view(None)
+        scenario_id = str(triggered.get("scenario", ""))
+        selected = next((scenario for scenario in snapshot.scenarios if scenario.id == scenario_id), None)
+        return scenario_inspector_view(selected)
+
+    @app.callback(
         [Output(f"pane-{v}", "style") for v in TABS] +
-        [Output(f"tabh-{v}", "label") for v in TABS],
+        [Output(f"tabh-{v}", "label") for v in TABS] +
+        [Output("workspace-title", "children")],
         [Input("tab", "value"), Input("lang", "value")],
     )
     def switch_tab(tab, lang):
         styles = [{"display": "block"} if v == tab else {"display": "none"} for v in TABS]
         labels = [t(lang, f"tab_{v}") for v in TABS]
-        return styles + labels
+        title = t(lang, f"tab_{tab}") if tab in TABS else "GAMMA"
+        return styles + labels + [title]
 
     @app.callback(
         [Output("profile", "figure"), Output("profile-exp", "figure"),
          Output("profile-hint", "children")],
         [Input("tick", "n_intervals"), Input("tab", "value"), Input("symbol", "value"),
          Input("window", "value"), Input("lang", "value"), Input("unit", "value"),
-         Input("cfd-active-offset", "data")],
+         Input("cfd-active-offset", "data"), Input("profile-expiry", "value"),
+         Input("profile-side", "value"), Input("profile-mode", "value")],
     )
-    def refresh_profile(_, tab, symbol, window, lang, unit, cfd_offset):
+    def refresh_profile(_, tab, symbol, window, lang, unit, cfd_offset, profile_expiry, profile_side, profile_mode):
         if tab != "profile":   # onglet masqué : rien à recalculer
             raise PreventUpdate
         st = chain_state(symbol)
@@ -4442,11 +5537,17 @@ def create_app() -> Dash:
             return e, e, t(lang, "profile_hint")
         cfd_off = float(cfd_offset or 0.0)
         xf, _, _ = _transform_for(symbol, unit, cfd_offset=cfd_off)
-        zg = summary.zero_gamma if summary else None
+        scoped = _profile_chain_for_display(df, profile_expiry or "Tout", profile_side or "ALL")
+        absolute = profile_mode == "ABSOLUTE"
+        zg = metrics.zero_gamma(scoped, snap.spot) if not absolute else None
         # fenêtre élargie : la courbe n'a d'intérêt que si elle montre le flip
         w = max(window, 0.06)
-        return (profile_fig(df, snap.spot, zg, lang, w, xf),
-                profile_by_expiry_fig(df, snap.spot, lang, w, xf),
+        active_buckets = tuple(EXPIRY_BUCKETS) if profile_expiry in (None, "Tout") else (profile_expiry,)
+        return (profile_fig(scoped, snap.spot, zg, lang, w, xf, absolute=absolute),
+                profile_by_expiry_fig(
+                    _profile_chain_for_display(df, "Tout", profile_side or "ALL"),
+                    snap.spot, lang, w, xf, buckets=active_buckets, absolute=absolute,
+                ),
                 t(lang, "profile_hint"))
 
     @app.callback(
@@ -4826,11 +5927,11 @@ def create_app() -> Dash:
         if trig == "tt-modal-disconnect-btn":
             log.info("Desconectando credenciales Tastytrade")
             tt_auth.clear_credentials()
-            msg = "🔒 Credenciales eliminadas correctamente. Los datos en tiempo real se han desactivado."
+            msg = "Credenciales eliminadas correctamente. Los datos en tiempo real se han desactivado."
             return (
                 no_update,
                 msg,
-                {"display": "block", "background": "rgba(239, 68, 68, 0.15)", "color": "#f87171", "border": "1px solid rgba(239, 68, 68, 0.3)"},
+                {"display": "block", "background": "rgba(240, 92, 124, 0.12)", "color": C["neg"], "border": f"1px solid {C['neg']}"},
                 dummy_val,
                 0
             )
@@ -4842,12 +5943,12 @@ def create_app() -> Dash:
         log.info(f"Validando credenciales - Client ID: {cid[:8]}...{cid[-4:] if len(cid) > 8 else cid} si existe")
         
         if not cid or not sec:
-            err_msg = "❌ Client ID y Client Secret son obligatorios. Por favor completa ambos campos."
+            err_msg = "Client ID y Client Secret son obligatorios. Por favor completa ambos campos."
             log.warning("Validación fallida: faltan credenciales")
             return (
                 no_update,
                 err_msg,
-                {"display": "block", "background": "rgba(239, 68, 68, 0.15)", "color": "#f87171", "border": "1px solid rgba(239, 68, 68, 0.3)"},
+                {"display": "block", "background": "rgba(240, 92, 124, 0.12)", "color": C["neg"], "border": f"1px solid {C['neg']}"},
                 dummy_val,
                 0
             )
@@ -4867,61 +5968,61 @@ def create_app() -> Dash:
                     _demarrer_les_flux()
                     log.info("Flujos de datos iniciados")
                     
-                    success_msg = """✅ ¡Conexión exitosa con Tastytrade!
+                    success_msg = """Conexión exitosa con Tastytrade.
 <br><br>
-📊 Token validado correctamente
-🔄 Datos en tiempo real activados
-📡 Flujos iniciados: QUOTES, TAPE, CAPTURE
+Token validado correctamente
+Datos en tiempo real activados
+Flujos iniciados: QUOTES, TAPE, CAPTURE
 <br><br>
 El modal se cerrará automáticamente en 3 segundos..."""
                     
                     return (
                         no_update,
                         success_msg,
-                        {"display": "block", "background": "rgba(34, 197, 94, 0.15)", "color": "#4ade80", "border": "1px solid rgba(34, 197, 94, 0.3)"},
+                        {"display": "block", "background": "rgba(45, 212, 191, 0.12)", "color": C["pos"], "border": f"1px solid {C['pos']}"},
                         dummy_val,
                         1  # Cierra el modal
                     )
                 except Exception as exc:
                     log.error(f"Error validando token: {exc}")
-                    error_msg = f"""❌ Error al validar con Tastytrade:
+                    error_msg = f"""Error al validar con Tastytrade:
 <br><br>
 {str(exc)}
 <br><br>
-🔍 Verifica:
+Verifica:
 - Client ID correcto
 - Client Secret correcto  
 - Refresh Token válido y no expirado
 <br><br>
-💡 Si el Refresh Token expiró, genera uno nuevo en my.tastytrade.com > Manage > My Profile > API > OAuth Applications > Manage > Create Grant"""
+Si el Refresh Token expiró, genera uno nuevo en my.tastytrade.com > Manage > My Profile > API > OAuth Applications > Manage > Create Grant"""
                     return (
                         no_update,
                         error_msg,
-                        {"display": "block", "background": "rgba(239, 68, 68, 0.15)", "color": "#f87171", "border": "1px solid rgba(239, 68, 68, 0.3)"},
+                        {"display": "block", "background": "rgba(240, 92, 124, 0.12)", "color": C["neg"], "border": f"1px solid {C['neg']}"},
                         dummy_val,
                         0
                     )
             else:
                 log.info("Redirigiendo a OAuth sin Refresh Token")
-                info_msg = """🌐 Redirigiendo a Tastytrade para autorización en navegador...
+                info_msg = """Redirigiendo a Tastytrade para autorización en navegador...
 <br><br>
-📋 Sigue estos pasos:
+Sigue estos pasos:
 1. Inicia sesión en Tastytrade
 2. Aprueba el acceso de la aplicación
 3. Serás redirigido automáticamente de vuelta
 <br><br>
-⚠️ Asegúrate que la Redirect URI coincida con: http://localhost:8080/oauth/callback"""
-                return "/oauth/start", info_msg, {"display": "block", "background": "rgba(57, 135, 229, 0.15)", "color": "#38bdf8", "border": "1px solid rgba(57, 135, 229, 0.3)"}, dummy_val, 0
+Nota: la Redirect URI debe coincidir con http://localhost:8080/oauth/callback"""
+                return "/oauth/start", info_msg, {"display": "block", "background": "rgba(34, 211, 238, 0.10)", "color": C["info"], "border": f"1px solid {C['info']}"}, dummy_val, 0
 
         log.info("Credenciales guardadas sin conexión inmediata")
-        save_msg = """💾 Credenciales guardadas correctamente
+        save_msg = """Credenciales guardadas correctamente
 <br><br>
-🔐 Client ID y Client Secret almacenados
-⏭️ Haz clic en "Guardar y Conectar" para activar tiempo real"""
+Client ID y Client Secret almacenados
+Haz clic en "Guardar y Conectar" para activar tiempo real"""
         return (
             no_update,
             save_msg,
-            {"display": "block", "background": "rgba(34, 197, 94, 0.15)", "color": "#4ade80", "border": "1px solid rgba(34, 197, 94, 0.3)"},
+            {"display": "block", "background": "rgba(45, 212, 191, 0.12)", "color": C["pos"], "border": f"1px solid {C['pos']}"},
             dummy_val,
             0
         )

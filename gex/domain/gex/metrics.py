@@ -36,7 +36,7 @@ def seconds_to_expiry(expiries: pd.Series, now_et: datetime) -> np.ndarray:
 
 
 def enrich(snapshot: ChainSnapshot, now_et: datetime | None = None) -> pd.DataFrame:
-    """Ajoute t, greeks calculés (BS sur l'IV du feed) et les colonnes GEX/DEX.
+    """Add normalized Greeks and GEX, DEX, Vanna, and Charm exposures.
 
     Quand l'IV du feed est nulle/absente (deep ITM sans quote), on retombe
     sur les Greeks CBOE — leur gamma est ~0 sur ces contrats de toute façon.
@@ -93,7 +93,10 @@ def enrich(snapshot: ChainSnapshot, now_et: datetime | None = None) -> pd.DataFr
     # auto-suffisant, et le backtest peut en recalculer les niveaux sans aller
     # chercher le prix ailleurs. Une constante ne coûte rien en Parquet.
     df["spot"] = float(s)
-    return df
+    # Keep second-order exposure on the normalized chain so level generation,
+    # inspectors, historical snapshots, and the dedicated Greeks view all use
+    # the same backend-owned source values.
+    return add_second_order(df, s)
 
 
 def add_second_order(df: pd.DataFrame, spot: float) -> pd.DataFrame:
@@ -151,7 +154,8 @@ def exposure_by_strike(df: pd.DataFrame, col: str) -> pd.DataFrame:
 
 
 def gamma_profile(df: pd.DataFrame, spot: float, weight_col: str = "open_interest",
-                  range_pct: float | None = None, steps: int | None = None
+                  range_pct: float | None = None, steps: int | None = None,
+                  absolute: bool = False,
                   ) -> tuple[np.ndarray, np.ndarray] | None:
     """Profil de GEX net recalculé sur une grille de spots hypothétiques.
 
@@ -178,7 +182,8 @@ def gamma_profile(df: pd.DataFrame, spot: float, weight_col: str = "open_interes
     oi = d[weight_col].to_numpy()[:, None]
     sign = np.where((d["type"] == "C").to_numpy()[:, None], 1.0, -1.0)
     g = greeks.gamma(grid[None, :], k, t, rates.current_rate(), iv)
-    profile = (sign * g * oi * CONTRACT_MULTIPLIER * grid[None, :] ** 2 * 0.01).sum(axis=0)
+    exposure = sign * g * oi * CONTRACT_MULTIPLIER * grid[None, :] ** 2 * 0.01
+    profile = np.abs(exposure).sum(axis=0) if absolute else exposure.sum(axis=0)
     return grid, profile
 
 

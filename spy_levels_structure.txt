@@ -1,0 +1,91 @@
+Calls 47% | Puts 53%
+
+Lectura del régimen
+Gamma Positivo - Delta Negativo (Dealers short gamma)
+→ Reducir riesgo en cortos | Largos con muy poco riesgo
+Lectura mecánica de la cobertura de los dealers, no es una señal de entrada ni una dirección garantizada.
+
+Niveles 0DTE (18/09):
+Gamma Flip
+767.0
+
+HVL
+764.0
+
+Call Wall
+767.0
+
+Put Support
+760.0
+
+1D Min
+756.46
+
+1D Max
+768.74
+
+GEX1
+757.0
+
+GEX2
+761.0
+
+GEX3
+758.0
+
+GEX4
+768.0
+
+GEX5
+765.0
+
+GEX6
+755.0
+
+GEX7
+770.0
+
+GEX8
+753.0
+
+GEX9
+774.0
+
+GEX10
+773.0
+
+Blindspot 1
+768.45
+
+Blindspot 2
+746.88
+
+Blindspot 3
+757.96
+
+Blindspot 4
+773.96
+
+Blindspot 5
+766.87
+
+Blindspot 6
+764.88
+
+Blindspot 7
+766.22
+
+Blindspot 8
+756.76
+
+Blindspot 9
+741.12
+
+Blindspot 10
+759.98
+
+Call Wall General
+780.0
+
+Put Support General
+745.0
