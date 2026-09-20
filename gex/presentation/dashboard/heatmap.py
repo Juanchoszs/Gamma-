@@ -18,7 +18,7 @@ from gex.presentation.dashboard.chart_animations import animation_engine
 COLORS = {
     "page": "#070a0f", "surface": "#0b1118", "grid": "#17232e",
     "muted": "#748295", "ink": "#f4f7fb", "spot": "#f4f7fb",
-    "flip": "#f6c85f", "call": "#2dd4bf", "put": "#f05c7c",
+    "flip": "#d8b65a", "call": "#58b6c4", "put": "#d98795",
 }
 _SNAPSHOT_CACHE: dict[
     tuple[str, str], tuple[float, list[tuple[datetime, pd.DataFrame]], float]
@@ -151,7 +151,7 @@ def build_intraday_heatmap(
         x=times, y=y_values, z=normalized,
         colorscale=[
             [0.0, "#0d1018"], [0.15, "#172554"], [0.42, "#155e75"],
-            [0.68, "#0f9bb0"], [0.86, "#2dd4bf"], [1.0, "#f6c85f"],
+            [0.68, "#247f99"], [0.86, "#58b6c4"], [1.0, "#d8b65a"],
         ],
         zmin=0, zmax=100, colorbar=dict(title="Intensity", thickness=12, tickfont=dict(color=COLORS["muted"])),
         hovertemplate=("<b>Strike</b> %{y:,.0f}<br><b>Time</b> %{x|%H:%M}<br>"

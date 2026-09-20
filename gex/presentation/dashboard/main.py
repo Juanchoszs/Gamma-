@@ -58,7 +58,11 @@ from gex.presentation.dashboard.options_overlay import (
     build_options_overlay_from_view_model,
     merge_relayout_ranges,
 )
-from gex.adapters.external.tt_web import connection_status, register_oauth
+from gex.adapters.external.tt_web import (
+    connection_status,
+    register_oauth,
+    shared_deployment_enabled,
+)
 from gex.adapters.external import tt_auth
 from gex.infrastructure.config import SETTINGS, UNDERLYINGS, targets, all_targets
 from gex.presentation.i18n.i18n import LANGS, regime_text, t, wall_labels
@@ -113,18 +117,18 @@ C = {
     "muted": "#748295",
     "grid": "#17232e",
     "axis": "#334354",
-    "pos": "#2dd4bf",
-    "neg": "#f05c7c",
+    "pos": "#58b6c4",
+    "neg": "#d98795",
     "spot": "#f4f7fb",
-    "zg": "#f6c85f",
-    "warn": "#f6c85f",
-    "lvl": "#22d3ee",
+    "zg": "#d8b65a",
+    "warn": "#d8b65a",
+    "lvl": "#58b6c4",
     "hvl": "#a78bfa",
-    "cw": "#22d3ee",
-    "ps": "#f05c7c",
+    "cw": "#58b6c4",
+    "ps": "#d98795",
     "d1": "#5e9cf3",
-    "ok": "#34d399",
-    "cat": ["#2dd4bf", "#f05c7c", "#a78bfa", "#f6c85f"],
+    "ok": "#6b93e5",
+    "cat": ["#58b6c4", "#d98795", "#a78bfa", "#d8b65a"],
 }
 
 FONT = 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
@@ -826,12 +830,22 @@ def _load_snaps_for_heat(symbol: str, day: str) -> tuple[list[tuple[datetime, pd
         _HEAT_BUBBLE_SNAPSHOT_CACHE[cache_key] = (now, *result)
         return result
 
-    spot = float(snaps[-1][1]["spot"].iloc[0]) if "spot" in snaps[-1][1].columns else 0.0
+    spot = _snapshot_spot(snaps[-1][1])
     if not spot:
         _, spot = _chain_for_day(symbol, day)
         spot = spot or 0.0
     _HEAT_BUBBLE_SNAPSHOT_CACHE[cache_key] = (now, snaps, spot)
     return snaps, spot
+
+
+def _snapshot_spot(frame: pd.DataFrame | None, fallback: float = 0.0) -> float:
+    """Return a positive recorded spot, never a zero placeholder."""
+    if frame is not None and not frame.empty and "spot" in frame:
+        values = pd.to_numeric(frame["spot"], errors="coerce")
+        valid = values[values.gt(0)]
+        if not valid.empty:
+            return float(valid.iloc[-1])
+    return float(fallback) if fallback > 0 else 0.0
 
 
 def heatmap_intraday_fig(symbol: str, lang: str, day: str | None = None, window: float = 0.08,
@@ -855,39 +869,29 @@ def heatmap_intraday_fig(symbol: str, lang: str, day: str | None = None, window:
     snaps_by_min = {}
     for ts, df_i in snaps:
         t_label = ts.strftime("%H:%M")
-        sp_i = float(df_i["spot"].iloc[0]) if "spot" in df_i.columns else spot
+        sp_i = _snapshot_spot(df_i, spot)
         snaps_by_min[t_label] = (ts, df_i, sp_i)
 
     times = list(snaps_by_min.keys())
-    if len(times) == 1:
-        t0 = times[0]
-        times = [f"{h:02d}:00" for h in [9, 10, 11, 12, 13, 14, 15, 16]]
-        for t_i in times[1:]:
-            snaps_by_min[t_i] = snaps_by_min[t0]
 
-    # Cargar precios reales en velas si existen, o sintetizar velas OHLC elegantes desde los spots
+    # Use stored OHLC only when every price field is valid. A closed session
+    # can briefly contain a zero placeholder, which must never reach Plotly.
     candles_data = []
-    prices_df = store.load_prices(symbol, day)
-    has_real_ohlc = not prices_df.empty and "open" in prices_df.columns
+    prices_df = _valid_price_overlay_rows(store.load_prices(symbol, day))
+    if prices_df.empty and symbol in {"ES", "NQ"}:
+        prices_df = _valid_price_overlay_rows(store.load_prices({"ES": "SPX", "NQ": "NDX"}[symbol], day))
+    has_real_ohlc = not prices_df.empty
 
     last_p = spot
-    for i, t_lbl in enumerate(times):
+    for t_lbl in times:
         ts, df_i, sp_i = snaps_by_min.get(t_lbl, (None, None, spot))
         if has_real_ohlc and ts is not None:
-            p_sub = prices_df[pd.to_datetime(prices_df["timestamp"]).dt.strftime("%H:%M") == t_lbl]
-            if not p_sub.empty:
-                r = p_sub.iloc[-1]
-                o, h, l, c = float(r["open"]), float(r["high"]), float(r["low"]), float(r["close"])
-            else:
-                o, c = last_p, sp_i
-                w_span = max(abs(c - o), spot * 0.0006)
-                h = max(o, c) + w_span * 0.35
-                l = min(o, c) - w_span * 0.35
+            distances = (prices_df["timestamp"] - pd.Timestamp(ts)).abs()
+            r = prices_df.loc[distances.idxmin()]
+            o, h, l, c = (float(r["open"]), float(r["high"]), float(r["low"]), float(r["close"]))
         else:
-            o, c = last_p, sp_i
-            w_span = max(abs(c - o), spot * 0.0006)
-            h = max(o, c) + w_span * 0.35
-            l = min(o, c) - w_span * 0.35
+            c = sp_i if sp_i > 0 else last_p
+            o = h = l = c
         last_p = c
         candles_data.append(dict(time=t_lbl, open=xf(o), high=xf(h), low=xf(l), close=xf(c)))
 
@@ -988,9 +992,9 @@ def heatmap_intraday_fig(symbol: str, lang: str, day: str | None = None, window:
         [0.24, "#35204b"],
         [0.42, "#6d275d"],
         [0.62, "#155e75"],
-        [0.78, "#0f9bb0"],
-        [0.92, "#2dd4bf"],
-        [1.00, "#f6c85f"],  # Concentración máxima
+        [0.78, "#247f99"],
+        [0.92, "#58b6c4"],
+        [1.00, "#d8b65a"],  # Concentración máxima
     ]
 
     fig.add_trace(
@@ -1006,9 +1010,10 @@ def heatmap_intraday_fig(symbol: str, lang: str, day: str | None = None, window:
         row=1, col=1,
     )
 
-    # 2. Velas Japonesas superpuestas en el heatmap (blanco para alcistas, oscuro/borde blanco para bajistas)
-    fig.add_trace(
-        go.Candlestick(
+    # 2. Plot actual OHLC when available; otherwise show the recorded close as
+    # a line instead of fabricating a candle from a snapshot.
+    if has_real_ohlc:
+        fig.add_trace(go.Candlestick(
             x=candles_df["time"],
             open=candles_df["open"],
             high=candles_df["high"],
@@ -1023,9 +1028,13 @@ def heatmap_intraday_fig(symbol: str, lang: str, day: str | None = None, window:
             showlegend=False,
             name=t(lang, "legend_spot"),
             hovertemplate="<b>O</b>: %{open:,.2f}<br><b>H</b>: %{high:,.2f}<br><b>L</b>: %{low:,.2f}<br><b>C</b>: %{close:,.2f}<extra></extra>",
-        ),
-        row=1, col=1,
-    )
+        ), row=1, col=1)
+    else:
+        fig.add_trace(go.Scatter(
+            x=candles_df["time"], y=candles_df["close"], mode="lines+markers",
+            name=t(lang, "legend_spot"), line=dict(color=C["spot"], width=2.2),
+            marker=dict(size=5, color=C["spot"]), hovertemplate=f"<b>{t(lang, 'legend_spot')}</b> %{{y:,.2f}}<extra></extra>",
+        ), row=1, col=1)
 
     # 3. Panel Central: Delta & Absorción
     # Barras rojas (Venta / Puts / Absorción bajista) hacia la izquierda
@@ -1159,6 +1168,7 @@ def heatmap_intraday_fig(symbol: str, lang: str, day: str | None = None, window:
             showgrid=True, gridcolor=C["grid"],
             tickfont=dict(color=C["ink2"], size=10),
             title=dict(text=t(lang, "heat_axis_strike"), font=dict(color=C["muted"], size=11)),
+            range=sorted((float(xf(lo)), float(xf(hi)))),
         ),
         yaxis3=dict(
             showgrid=True, gridcolor=C["grid"],
@@ -1228,7 +1238,7 @@ def heatmap_term_fig(symbol: str, lang: str, day: str | None = None, window: flo
             [0.0, C["page"]],
             [0.25, "#172554"],
             [0.5, "#155e75"],
-            [0.75, "#22d3ee"],
+            [0.75, "#58b6c4"],
             [1.0, C["zg"]],
         ]
         zmid = None
@@ -1330,7 +1340,7 @@ def heatmap_bubbles_fig(symbol: str, lang: str, day: str | None = None, window: 
     - Eje X: Horas de la sesión
     - Eje Y: Strikes (transpuestos con xf)
     - Tamaño: Proporcional al volumen/OI de contratos
-    - Color: Calls en Cian Neón (#00f0ff), Puts en Magenta Neón (#ff2e74)
+    - Color: Calls en cyan institucional, Puts en coral institucional
     - Superposición de la trayectoria del precio spot y muros institucionales
     """
     day = day or datetime.now(ET).strftime("%Y-%m-%d")
@@ -1349,38 +1359,65 @@ def heatmap_bubbles_fig(symbol: str, lang: str, day: str | None = None, window: 
 
     fig = go.Figure()
 
-    # Deduplicar por minuto
+    # Deduplicate snapshots by minute. The chart intentionally plots changes
+    # between snapshots, not the full option-chain inventory every time.
     snaps_by_min = {}
     for ts, df_i in snaps:
-        t_label = ts.strftime("%H:%M")
-        sp_i = float(df_i["spot"].iloc[0]) if "spot" in df_i.columns else spot
-        snaps_by_min[t_label] = (ts, df_i, sp_i)
+        snapshot_time = pd.Timestamp(ts).floor("min")
+        snaps_by_min[snapshot_time] = (df_i, _snapshot_spot(df_i, spot))
 
     last_df = snaps[-1][1]
     has_vol = "volume" in last_df.columns and float(last_df["volume"].fillna(0).sum()) > 0
     vol_col = "volume" if (has_vol and metric != "oi") else "open_interest"
     metric_lbl = "Volumen" if vol_col == "volume" else "Open Interest"
 
-    times = []
+    times: list[pd.Timestamp] = []
     spot_trajectory = []
     bubble_frames = []
+    previous_contracts = None
 
-    for t_label, (ts, df_i, sp_i) in snaps_by_min.items():
-        times.append(t_label)
+    for snapshot_time in sorted(snaps_by_min):
+        df_i, sp_i = snaps_by_min[snapshot_time]
+        times.append(snapshot_time)
         spot_trajectory.append(sp_i)
-        if "strike" not in df_i.columns or vol_col not in df_i.columns:
+        required = {"strike", "type", vol_col}
+        if not required.issubset(df_i.columns):
             continue
-        sub = df_i.loc[
-            df_i["strike"].between(lo, hi)
-            & pd.to_numeric(df_i[vol_col], errors="coerce").fillna(0).ge(float(min_size))
-        ].copy()
-        if sub.empty:
+
+        group_keys = ["strike", "type"]
+        if "expiry" in df_i.columns:
+            group_keys.append("expiry")
+        source = df_i.loc[df_i["strike"].between(lo, hi)].copy()
+        source["strike"] = pd.to_numeric(source["strike"], errors="coerce")
+        source[vol_col] = pd.to_numeric(source[vol_col], errors="coerce").fillna(0.0)
+        source = source.dropna(subset=["strike"])
+        if source.empty:
             continue
-        sub = sub.copy()
-        sub["bubble_weight"] = pd.to_numeric(sub[vol_col], errors="coerce").fillna(0.0)
-        sub["bubble_time"] = t_label
-        sub["bubble_spot"] = sp_i
-        bubble_frames.append(sub)
+
+        aggregations = {vol_col: "sum"}
+        for column in ("open_interest", "volume", "gex", "last_trade_price", "bid"):
+            if column in source.columns and column not in aggregations:
+                aggregations[column] = "sum" if column in {"open_interest", "volume", "gex"} else "last"
+        contracts = source.groupby(group_keys, as_index=False, dropna=False).agg(aggregations)
+        contracts["type"] = contracts["type"].astype(str).str.upper()
+
+        if previous_contracts is not None:
+            previous = previous_contracts[group_keys + [vol_col]].rename(columns={vol_col: "previous_value"})
+            changes = contracts.merge(previous, on=group_keys, how="left")
+            changes["previous_value"] = changes["previous_value"].fillna(0.0)
+            changes["bubble_change"] = changes[vol_col] - changes["previous_value"]
+            changes["bubble_weight"] = changes["bubble_change"].abs()
+            # Cumulative volume should only surface new contracts. OI can move
+            # in either direction, which remains visible in the hover detail.
+            if vol_col == "volume":
+                changes = changes[changes["bubble_change"].gt(0)]
+            changes = changes[changes["bubble_weight"].ge(float(min_size)) & changes["bubble_weight"].gt(0)]
+            if not changes.empty:
+                changes["bubble_time"] = snapshot_time
+                changes["bubble_spot"] = sp_i
+                bubble_frames.append(changes)
+
+        previous_contracts = contracts[group_keys + [vol_col]].copy()
 
     bubbles = pd.concat(bubble_frames, ignore_index=True) if bubble_frames else pd.DataFrame()
     if not bubbles.empty:
@@ -1399,24 +1436,28 @@ def heatmap_bubbles_fig(symbol: str, lang: str, day: str | None = None, window: 
         exp = str(getattr(row, "expiry", ""))
         gex_v = float(getattr(row, "gex", 0.0) or 0.0) / 1e6
         gex_str = f"{gex_v:+.1f} $M" if abs(gex_v) < 1000 else f"{gex_v/1000:+.2f} $Bn"
-        t_label = str(getattr(row, "bubble_time", ""))
+        change = float(getattr(row, "bubble_change", 0.0) or 0.0)
+        t_label = pd.Timestamp(getattr(row, "bubble_time", "")).strftime("%H:%M")
         hover_text = (
             f"<b>{symbol} {stk:,.0f} {'CALL' if is_call else 'PUT'}</b><br>"
-            f"Vencimiento: {exp}<br>{metric_lbl}: {w:,.0f} contratos<br>"
+            f"Vencimiento: {exp}<br>Delta {metric_lbl}: {change:+,.0f} contratos<br>"
             f"Open Interest: {oi:,.0f}<br>Volumen: {vol:,.0f}<br>"
             f"Precio: ${px:,.2f}<br>GEX: {gex_str}<br>Hora: {t_label}"
         )
         target = (call_x, call_y, call_weights, call_hover) if is_call else (put_x, put_y, put_weights, put_hover)
-        target[0].append(t_label)
+        target[0].append(getattr(row, "bubble_time"))
         target[1].append(xf(stk))
         target[2].append(w)
         target[3].append(hover_text)
 
     all_w = call_weights + put_weights
-    max_w = max(all_w) if all_w else 1.0
+    max_log_weight = np.log1p(max(all_w)) if all_w else 1.0
+
+    def bubble_sizes(weights: list[float]) -> list[float]:
+        return [max(8, min(42, 8 + 34 * (np.log1p(weight) / max_log_weight) ** 0.65)) for weight in weights]
 
     if call_weights:
-        call_size = [max(7, min(42, 7 + 35 * (w / max_w) ** 0.5)) for w in call_weights]
+        call_size = bubble_sizes(call_weights)
         fig.add_trace(go.Scatter(
             x=call_x, y=call_y,
             mode="markers",
@@ -1431,7 +1472,7 @@ def heatmap_bubbles_fig(symbol: str, lang: str, day: str | None = None, window: 
         ))
 
     if put_weights:
-        put_size = [max(7, min(42, 7 + 35 * (w / max_w) ** 0.5)) for w in put_weights]
+        put_size = bubble_sizes(put_weights)
         fig.add_trace(go.Scatter(
             x=put_x, y=put_y,
             mode="markers",
@@ -1457,6 +1498,13 @@ def heatmap_bubbles_fig(symbol: str, lang: str, day: str | None = None, window: 
             marker=dict(size=5, color=C["spot"]),
             hovertemplate=f"{t(lang, 'legend_spot')}: %{{y:,.2f}}<br>{t(lang, 'heat_axis_time')}: %{{x}}<extra></extra>",
         ))
+    if bubbles.empty:
+        fig.add_annotation(
+            text="No contract changes were captured between stored snapshots.",
+            xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False,
+            font=dict(color=C["muted"], size=12),
+            bgcolor="rgba(15, 23, 29, 0.82)", bordercolor=C["grid"], borderpad=9,
+        )
 
     ref_s = ref_spot(symbol, spot)
     cur_df = snaps[-1][1]
@@ -1478,6 +1526,7 @@ def heatmap_bubbles_fig(symbol: str, lang: str, day: str | None = None, window: 
     lay = with_legend(lay)
     lay["yaxis"]["title"] = dict(text=t(lang, "heat_axis_strike"), font=dict(color=C["muted"]))
     lay["xaxis"]["title"] = dict(text=t(lang, "heat_axis_time"), font=dict(color=C["muted"]))
+    lay["yaxis"]["range"] = sorted((float(xf(lo)), float(xf(hi))))
     fig.update_layout(**lay)
     return fig
 
@@ -1646,11 +1695,13 @@ def heatmap_fig(symbol: str, lang: str, day: str | None = None,
     # retombe sur l'historique du symbole natif, passé par xf.
     path, native_price = None, False
     if unit and unit in ("NQ", "ES") and unit != symbol:
-        alt = _price_overlay(unit, day)
+        alt_close = store.previous_close_spot(unit, day=day) or spot
+        alt = _price_overlay(unit, day, fallback_close=alt_close)
         if alt is not None and not alt.empty:
             path, native_price = alt, True
     if path is None:
-        path = _price_overlay(symbol, day)
+        last_close = store.previous_close_spot(symbol, day=day) or spot
+        path = _price_overlay(symbol, day, fallback_close=last_close)
 
     lo, hi = spot * (1 - window), spot * (1 + window)
     sel = df[df["strike"].between(lo, hi)]
@@ -1702,7 +1753,7 @@ def heatmap_fig(symbol: str, lang: str, day: str | None = None,
         else:
             fig.add_scatter(x=ts, y=_id(path["close"].to_numpy()),
                             mode="lines", name=t(lang, "legend_spot"),
-                            line=dict(color="#22d3ee", width=1.3),
+                            line=dict(color="#58b6c4", width=1.3),
                             hovertemplate=(f"%{{x|%H:%M}}<br>{t(lang, 'legend_spot')}"
                                            " %{y:.0f}<extra></extra>"))
 
@@ -1749,6 +1800,11 @@ def heatmap_fig(symbol: str, lang: str, day: str | None = None,
     # False, on peut resserrer la fenêtre de prix à la molette ou en glissant
     # sur l'axe — et _apply_user_zoom rend ce zoom persistant.
     lay["yaxis"]["fixedrange"] = False
+    # The price axis must start around the selected strike window. Relying on
+    # Plotly autorange allows a stale zero-valued quote to stretch the view to
+    # zero even after that quote has been filtered from the current path.
+    y_low, y_high = sorted((float(xf(lo)), float(xf(hi))))
+    lay["yaxis"]["range"] = [y_low, y_high]
     lay["xaxis"]["title"] = dict(text=t(lang, "heat_axis_time"),
                                  font=dict(color=C["muted"]))
     # Type déclaré explicitement : les seules traces portant des données sont
@@ -1841,23 +1897,57 @@ def _chain_for_day(symbol: str, day: str) -> tuple[pd.DataFrame | None, float | 
     return df, spot
 
 
-def _price_overlay(symbol: str, day: str) -> pd.DataFrame | None:
+def _price_overlay(symbol: str, day: str, fallback_close: float | None = None) -> pd.DataFrame | None:
     """Parcours du prix pour le heatmap : bougies 1 min (open/high/low/close),
     à défaut les spots des snapshots (plus grossiers, une seule valeur par
-    pull — open=high=low=close, pas de vraies bougies possibles avec ça)."""
-    px = store.load_prices(symbol, day)
+    pull — open=high=low=close, pas de vraies bougies possibles avec ça).
+
+    A zero or non-finite quote is never a price level. Closed sessions can
+    temporarily leave such a placeholder behind, so retain only valid OHLC
+    rows and use the last persisted close as a final, explicit price anchor.
+    """
+    px = _valid_price_overlay_rows(store.load_prices(symbol, day))
     if not px.empty:
-        return px.sort_values("timestamp")[["timestamp", "open", "high", "low", "close"]]
+        return px
     h = store.load_history(symbol)
     if h.empty:
-        return None
-    hts = pd.to_datetime(h["timestamp"])
+        return _closing_price_anchor(day, fallback_close)
+    hts = pd.to_datetime(h["timestamp"], errors="coerce")
     sel = h[hts.dt.strftime("%Y-%m-%d") == day].sort_values("timestamp")
-    if sel.empty:
+    if not sel.empty:
+        out = sel[["timestamp", "spot"]].rename(columns={"spot": "close"})
+        out["open"] = out["high"] = out["low"] = out["close"]
+        out = _valid_price_overlay_rows(out)
+        if not out.empty:
+            return out
+    return _closing_price_anchor(day, fallback_close)
+
+
+def _valid_price_overlay_rows(frame: pd.DataFrame | None) -> pd.DataFrame:
+    """Keep only complete, positive OHLC rows so zero cannot distort a chart."""
+    columns = ["timestamp", "open", "high", "low", "close"]
+    if frame is None or frame.empty or not set(columns).issubset(frame.columns):
+        return pd.DataFrame(columns=columns)
+    out = frame[columns].copy()
+    for column in columns[1:]:
+        out[column] = pd.to_numeric(out[column], errors="coerce")
+    out["timestamp"] = pd.to_datetime(out["timestamp"], errors="coerce")
+    valid = out["timestamp"].notna() & out[columns[1:]].gt(0).all(axis=1)
+    return out.loc[valid].sort_values("timestamp")
+
+
+def _closing_price_anchor(day: str, fallback_close: float | None) -> pd.DataFrame | None:
+    """Return one line-only price reference when valid intraday bars are absent."""
+    close = pd.to_numeric(pd.Series([fallback_close]), errors="coerce").iloc[0]
+    if pd.isna(close) or close <= 0:
         return None
-    out = sel[["timestamp", "spot"]].rename(columns={"spot": "close"})
-    out["open"] = out["high"] = out["low"] = out["close"]
-    return out
+    return pd.DataFrame({
+        "timestamp": [pd.Timestamp(f"{day} 16:00")],
+        "open": [float(close)],
+        "high": [float(close)],
+        "low": [float(close)],
+        "close": [float(close)],
+    })
 
 
 def gamma_flow_fig(symbol: str, lang: str, day: str | None = None,
@@ -3017,7 +3107,9 @@ def build_cards(symbol: str, lang: str, xf=None, scale: str | None = None) -> li
 # seulement la heatmap : un ami qui demande « la courbe du Delta de NQ » doit
 # la recevoir comme n'importe quel autre. D'où ce dispatch unique par nom.
 CHART_NAMES = ("gex", "dex", "heatmap", "flow", "gflow", "tape", "history",
-               "spotzg", "smile", "profile", "profile_exp", "vanna", "charm", "oi")
+               "spotzg", "smile", "profile", "profile_exp", "vanna", "charm", "oi",
+               "oi_change", "pos_hist", "vol_surface", "iv_term_structure",
+               "gex_by_expiry", "oi_by_expiry")
 
 
 def _figure_for(symbol: str, name: str, lang: str = "es", bucket: str = "Tout",
@@ -3052,6 +3144,14 @@ def _figure_for(symbol: str, name: str, lang: str = "es", bucket: str = "Tout",
         return history_fig(symbol, lang)
     if name == "spotzg":
         return spot_zg_fig(symbol, lang)
+    if name == "vol_surface":
+        return vol_surface_fig(symbol, lang, window=window or 0.15)
+    if name == "iv_term_structure":
+        return iv_term_structure_fig(symbol, lang)
+    if name == "gex_by_expiry":
+        return gex_by_expiry_fig(symbol, lang)
+    if name == "oi_by_expiry":
+        return oi_by_expiry_fig(symbol, lang)
 
     # Graphiques qui ont besoin de la chaîne enrichie courante.
     st = chain_state(symbol)
@@ -3515,9 +3615,12 @@ def create_app() -> Dash:
                suppress_callback_exceptions=True)
     enabled = all_targets()
     from gex.adapters.market_data.rtquote import _env
-    init_cid = _env("TASTYTRADE_CLIENT_ID") or ""
-    init_sec = _env("TASTYTRADE_CLIENT_SECRET") or ""
-    init_ref = _env("TT_REFRESH") or ""
+    # Credentials must never be serialized into the Dash layout. They remain
+    # server-side whether this is a local or shared deployment.
+    init_cid = ""
+    init_sec = ""
+    init_ref = ""
+    shared_deployment = shared_deployment_enabled()
 
     init_sym = enabled[0].key if enabled else "SPX"
     alert_monitor = AlertMonitor()
@@ -3591,7 +3694,8 @@ def create_app() -> Dash:
                     html.Button([
                         html.Span(id="tt-btn-text", children="API Tastytrade"),
                     ], id="tt-modal-open-btn", className="btn-tt-api", n_clicks=0,
-                       title="Configurar credenciales API Tastytrade"),
+                       title="Configurar credenciales API Tastytrade",
+                       style={"display": "none"} if shared_deployment else None),
                     # état du flux temps réel : pastille et libellé
                     html.Div([html.Span(className="rt-dot"),
                               html.Span(id="rt-label")],
@@ -5889,12 +5993,11 @@ def create_app() -> Dash:
         prevent_initial_call=True,
     )
     def handle_tt_modal(open_clicks, rt_clicks, close_icon, close_btn, current_style, cur_cid, cur_sec, cur_ref):
+        if shared_deployment:
+            return {"display": "none"}, "", "", ""
         trig = ctx.triggered_id
         if trig in ("tt-modal-open-btn", "rt-badge"):
-            cid = _env("TASTYTRADE_CLIENT_ID") or cur_cid or ""
-            sec = _env("TASTYTRADE_CLIENT_SECRET") or cur_sec or ""
-            ref = _env("TT_REFRESH") or cur_ref or ""
-            return {"display": "flex"}, cid, sec, ref
+            return {"display": "flex"}, cur_cid or "", cur_sec or "", cur_ref or ""
         elif trig in ("tt-modal-close-icon", "tt-modal-close-btn"):
             return {"display": "none"}, cur_cid, cur_sec, cur_ref
         return current_style or {"display": "none"}, cur_cid, cur_sec, cur_ref
@@ -5921,6 +6024,15 @@ def create_app() -> Dash:
         
         trig = ctx.triggered_id
         dummy_val = (dummy_val or 0) + 1
+
+        if shared_deployment:
+            return (
+                no_update,
+                "This shared deployment uses server-managed market-data credentials.",
+                {"display": "block", "background": "rgba(34, 211, 238, 0.10)", "color": C["info"], "border": f"1px solid {C['info']}"},
+                dummy_val,
+                0,
+            )
         
         log.info(f"Acción Tastytrade iniciada: {trig}")
         

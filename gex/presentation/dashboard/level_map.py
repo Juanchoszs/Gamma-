@@ -38,8 +38,7 @@ def build_level_map_figure(
     levels = visible_levels
     fig.add_trace(go.Scatter(
         x=[level.strength for level in levels], y=[level.price for level in levels],
-        mode="markers+text", text=[level.level_type.value.replace("_", " ") for level in levels],
-        textposition="middle right", textfont={"size": 10, "color": _PALETTE.text_primary},
+        mode="markers", text=[level.level_type.value.replace("_", " ") for level in levels],
         marker={"size": 10, "color": [_COLORS.get(level.level_type.value, _PALETTE.level_neutral) for level in levels]},
         customdata=[[level.source.value, level.session.value, level.status.value, level.distance_percent]
                     for level in levels],

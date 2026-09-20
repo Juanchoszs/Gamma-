@@ -1,10 +1,13 @@
 from datetime import date, datetime
 
 import pandas as pd
+import pytest
 
 from gex.application.market_intelligence.options_chain import (
+    ExpiryExposureMapConfig,
     OptionsChainConfig,
     available_expirations,
+    build_expiry_exposure_map_payload,
     build_options_chain_payload,
 )
 from gex.domain.market.intelligence import LevelSource, LevelType, MarketLevel
@@ -66,3 +69,26 @@ def test_options_chain_payload_filters_aggregated_strikes_by_metrics():
     assert {"LARGE GEX", "HIGH IV"}.issubset(
         set(flag for row in build_options_chain_payload(chain=_chain(), spot=100.0)["rows"] for flag in row["flags"])
     )
+
+
+def test_expiry_exposure_map_uses_existing_gex_and_open_interest_only():
+    gex = build_expiry_exposure_map_payload(
+        chain=_chain(), spot=100.0,
+        config=ExpiryExposureMapConfig(metric="gex", expiries=2, strikes_each_side=2),
+    )
+    oi = build_expiry_exposure_map_payload(
+        chain=_chain(), spot=100.0,
+        config=ExpiryExposureMapConfig(metric="oi", expiries=2, strikes_each_side=2),
+    )
+
+    assert gex["expirations"] == ["2026-09-18", "2026-09-25"]
+    assert [row["strike"] for row in gex["rows"]] == [105.0, 100.0, 95.0]
+    assert next(row for row in gex["rows"] if row["strike"] == 100.0)["values"] == [200.0, 0.0]
+    assert gex["expiry_totals"] == [100.0, 80.0]
+    assert oi["expiry_totals"] == [190.0, 40.0]
+    assert "iv" not in repr(gex["rows"]).lower()
+
+
+def test_expiry_exposure_map_rejects_unsupported_metrics():
+    with pytest.raises(ValueError, match="metric"):
+        ExpiryExposureMapConfig(metric="iv")

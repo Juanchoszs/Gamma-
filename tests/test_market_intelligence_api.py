@@ -60,6 +60,21 @@ def _client(monkeypatch):
     return app.test_client()
 
 
+def test_react_terminal_canonicalizes_duplicate_public_base(monkeypatch):
+    client = _client(monkeypatch)
+
+    overview = client.get("/terminal/terminal?bucket=0DTE")
+    base = client.get("/terminal?bucket=0DTE")
+    module = client.get("/terminal/terminal/map?symbol=SPY")
+
+    assert overview.status_code == 308
+    assert overview.headers["Location"] == "/terminal/?bucket=0DTE"
+    assert base.status_code == 308
+    assert base.headers["Location"].endswith("/terminal/?bucket=0DTE")
+    assert module.status_code == 308
+    assert module.headers["Location"] == "/terminal/map?symbol=SPY"
+
+
 def test_market_state_endpoint_returns_structured_state(monkeypatch):
     client = _client(monkeypatch)
 
@@ -133,6 +148,44 @@ def test_market_report_endpoint_returns_automatic_report(monkeypatch):
     assert payload["scenarios"]
 
 
+def test_market_report_endpoint_localizes_analysis_to_spanish(monkeypatch):
+    client = _client(monkeypatch)
+
+    response = client.get("/api/v1/SPX/market/report?bucket=Tout&lang=es")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    rendered = repr(payload)
+    assert "Concentracion" in rendered or "El regimen" in rendered
+    assert "Call concentration" not in rendered
+
+
+def test_price_history_endpoint_resamples_stored_sessions_without_inventing_bars(monkeypatch):
+    client = _client(monkeypatch)
+    frame = pd.DataFrame({
+        "timestamp": ["2026-09-17 09:30:00", "2026-09-17 09:31:00", "2026-09-18 09:30:00"],
+        "open": [100.0, 101.0, 102.0], "high": [101.0, 102.0, 103.0],
+        "low": [99.0, 100.0, 101.0], "close": [100.5, 101.5, 102.5],
+        "volume": [10.0, 20.0, 30.0],
+    })
+    monkeypatch.setattr("gex.adapters.persistence.store.price_days", lambda _symbol: ["2026-09-17", "2026-09-18"])
+    monkeypatch.setattr("gex.adapters.persistence.store.load_prices", lambda _symbol, _day: frame)
+
+    response = client.get("/api/v1/SPX/market/prices/history?days=2&interval=5m")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["sessions"] == ["2026-09-17", "2026-09-18"]
+    assert payload["requested_sessions"] == 2
+    assert payload["available_sessions"] == 2
+    assert payload["interval"] == "5m"
+    assert len(payload["rows"]) == 2
+    assert payload["rows"][0]["timestamp"] == "2026-09-17T09:30:00-04:00"
+    assert payload["rows"][0]["open"] == 100.0
+    assert payload["rows"][0]["high"] == 102.0
+    assert payload["rows"][0]["volume"] == 60.0
+
+
 def test_market_report_endpoint_includes_session_profile_levels(monkeypatch):
     client = _client(monkeypatch)
     previous = pd.DataFrame({
@@ -183,6 +236,53 @@ def test_market_map_endpoint_returns_positioning_rows_levels_and_state(monkeypat
     assert "probability" not in repr(payload).lower()
 
 
+def test_market_overlay_endpoint_returns_normalized_price_and_gex_contract(monkeypatch):
+    client = _client(monkeypatch)
+
+    response = client.get("/api/v1/SPX/market/overlay?bucket=Tout&flow_type=CALLS&min_premium=1000")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["symbol"] == "SPX"
+    assert payload["current_price"] == 7592.45
+    assert {"price_series", "gex_levels", "flow_bubbles", "market_regime", "filters", "source"}.issubset(payload)
+    assert payload["filters"]["flow_type"] == "CALLS"
+    assert all("price" in level and "name" in level for level in payload["gex_levels"])
+
+
+def test_react_chart_suite_serializes_existing_dash_figures(monkeypatch):
+    client = _client(monkeypatch)
+
+    response = client.get("/api/v1/SPX/market/charts?names=market-map-chart,unified-level-map&bucket=Tout")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["symbol"] == "SPX"
+    assert set(payload["charts"]) == {"market-map-chart", "unified-level-map"}
+    assert all(chart and chart["data"] for chart in payload["charts"].values())
+
+
+def test_react_chart_suite_rejects_unknown_figures(monkeypatch):
+    client = _client(monkeypatch)
+
+    response = client.get("/api/v1/SPX/market/charts?names=not-a-real-chart")
+
+    assert response.status_code == 400
+    assert "not allowed" in response.get_json()["error"]
+
+
+def test_react_chart_suite_accepts_the_primary_dash_overlay_contract(monkeypatch):
+    client = _client(monkeypatch)
+
+    response = client.get(
+        "/api/v1/SPX/market/charts?names=options-flow-overlay&series=calls,net"
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert "options-flow-overlay" in payload["charts"]
+
+
 def test_options_chain_endpoint_returns_highlighted_strike_rows(monkeypatch):
     client = _client(monkeypatch)
 
@@ -211,6 +311,26 @@ def test_options_chain_endpoint_excludes_structurally_invalid_contracts(monkeypa
 
     assert response.status_code == 200
     assert all(row["strike"] > 0 for row in response.get_json()["rows"])
+
+
+def test_expiry_map_endpoint_returns_a_real_strike_by_expiry_matrix(monkeypatch):
+    client = _client(monkeypatch)
+
+    response = client.get("/api/v1/SPX/market/expiry-map?metric=gex&expiries=3&strikes=5")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["symbol"] == "SPX"
+    assert payload["as_of"] == "2026-09-18T09:45:00"
+    assert payload["source"] == "cboe"
+    assert payload["metric"] == "gex"
+    assert payload["expirations"] == ["2026-09-18"]
+    assert payload["rows"]
+    assert payload["nearest_strike"] == 7590.0
+    assert len(payload["rows"][0]["values"]) == len(payload["expirations"])
+
+    invalid = client.get("/api/v1/SPX/market/expiry-map?metric=iv")
+    assert invalid.status_code == 400
 
 
 def test_level_history_endpoint_returns_only_saved_snapshot_observations(monkeypatch):

@@ -17,13 +17,15 @@ respecter : ce serveur ne doit pas être exposé au-delà de la machine locale
 """
 from __future__ import annotations
 
+import json
 from datetime import date, datetime
 from datetime import time as dt_time
+from pathlib import Path
 from time import monotonic
 from zoneinfo import ZoneInfo
 
 import pandas as pd
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, redirect, request, send_from_directory
 
 from gex.application.market_intelligence import (
     build_symbol_diagnostics,
@@ -33,6 +35,7 @@ from gex.application.market_intelligence import (
     build_market_levels_from_gex_outputs,
     build_market_map_payload,
     build_options_chain_payload,
+    build_expiry_exposure_map_payload,
     build_session_levels_from_profile,
     build_session_profile_payload,
     diagnostics_payload,
@@ -41,6 +44,7 @@ from gex.application.market_intelligence import (
     market_report_to_dict,
     market_state_to_dict,
     OptionsChainConfig,
+    ExpiryExposureMapConfig,
     AlertMonitor,
     classify_data_freshness,
     MarketIntelligenceConfig,
@@ -50,6 +54,7 @@ from gex.application.market_intelligence import (
     LevelBuildConfig,
     scenario_to_dict,
 )
+from gex.application.options_flow.levels import build_gex_levels
 from gex.domain.gex import metrics
 from gex.domain.gex.metrics import ET, EXPIRY_BUCKETS
 from gex.domain.market.intelligence import SessionType
@@ -61,6 +66,15 @@ _ALERT_MONITOR = AlertMonitor()
 _INTELLIGENCE_CACHE_TTL_S = 1.5
 _INTELLIGENCE_CACHE: dict[tuple, tuple[float, object]] = {}
 _MARKET_COMPUTE_METRICS: dict[str, tuple[float, datetime]] = {}
+
+REACT_CHART_NAMES = frozenset({
+    "options-flow-overlay", "overview-market-map", "gex-strike", "dex-strike", "flow", "gflow", "tape",
+    "gex-history", "spot-zg", "smile", "market-map-chart", "unified-level-map",
+    "profile", "profile-exp", "vex", "cex", "heatmap-intraday", "heatmap-bubbles",
+    "heatmap-term", "heatmap-hist", "heatmap-overlay", "pos-dist-graph", "oi-change",
+    "pos-hist-graph", "vol-surface", "iv-term-structure", "gex-by-expiry",
+    "oi-by-expiry", "level-history-chart",
+})
 
 
 def _clear_market_intelligence_cache() -> None:
@@ -413,6 +427,41 @@ def _options_chain_payload(
     )
 
 
+def _expiry_exposure_map_payload(
+    symbol: str,
+    *,
+    metric: str = "gex",
+    expiries: int = 10,
+    strikes_each_side: int = 10,
+):
+    """Serve a real contract-derived strike x expiry matrix for React."""
+    symbol = symbol.upper()
+    summary, chain = _current_summary(symbol)
+    if summary is None or chain is None:
+        return None
+    chain = valid_option_records(chain)
+    if chain.empty:
+        return None
+    payload = build_expiry_exposure_map_payload(
+        chain=chain,
+        spot=summary.spot,
+        config=ExpiryExposureMapConfig(
+            metric=metric,
+            expiries=expiries,
+            strikes_each_side=strikes_each_side,
+        ),
+    )
+    freshness, freshness_age = classify_data_freshness(summary.timestamp, now=datetime.now(ET))
+    payload.update({
+        "symbol": symbol,
+        "as_of": summary.timestamp.isoformat(),
+        "freshness": freshness.value,
+        "freshness_age_seconds": freshness_age,
+        "source": summary.source,
+    })
+    return payload
+
+
 def _market_level_history_payload(symbol: str, day: str | None = None, bucket: str = "Tout"):
     """Derive history only from persisted enriched snapshots for one session."""
     from gex.adapters.persistence import store
@@ -601,11 +650,446 @@ def _market_diagnostics_payload() -> dict[str, object]:
     )
 
 
+def _market_overlay_payload(
+    symbol: str,
+    *,
+    bucket: str = "0DTE",
+    flow_type: str = "ALL",
+    flow_side: str = "ALL",
+    flow_expiration: str = "ALL",
+    min_premium: float = 0.0,
+    min_volume: float = 0.0,
+    window: float = 0.03,
+    timeframe: str = "2d",
+) -> dict[str, object] | None:
+    """Return the normalized price/GEX/flow view model for React.
+
+    The dashboard overlay already owns the live tape adapter and flow
+    aggregation.  This endpoint deliberately delegates to it instead of
+    creating a second interpretation of the options-flow data.
+    """
+    symbol = symbol.upper()
+    summary, chain = _current_summary(symbol)
+    if summary is None or chain is None:
+        return None
+    chain = valid_option_records(chain)
+    if chain.empty:
+        return None
+    if bucket not in EXPIRY_BUCKETS:
+        bucket = "0DTE"
+
+    from gex.adapters.persistence import store
+    from gex.presentation.dashboard.main import (
+        overlay_flow_bubbles,
+        overlay_price_series,
+        overlay_expiration_filter,
+    )
+
+    timestamp = summary.timestamp
+    market_day = timestamp.astimezone(ET).date().isoformat() if timestamp.tzinfo else timestamp.date().isoformat()
+    prices, previous_prices = overlay_price_series(symbol, market_day, timeframe)
+    previous_spot = store.previous_close_spot(symbol, day=market_day) or summary.spot
+    is_open = market_is_open()
+    live_spot = summary.spot if is_open else previous_spot
+    level_result = metrics.compute_levels(chain, previous_spot, live_spot, bucket=bucket)
+    gamma_flip = metrics.zero_gamma(chain, previous_spot)
+    levels = build_gex_levels(chain, summary.spot, gamma_flip, level_result["keys"])
+    flow_filter = overlay_expiration_filter(flow_expiration, None)
+    bubbles = overlay_flow_bubbles(
+        symbol,
+        summary.spot,
+        min_premium,
+        min_volume,
+        flow_type,
+        flow_side,
+        flow_filter,
+        window,
+    ) if market_day == datetime.now(ET).date().isoformat() else []
+
+    def iso(value):
+        if value is None:
+            return None
+        if hasattr(value, "isoformat"):
+            return value.isoformat()
+        return value
+
+    price_rows = []
+    for row in prices.to_dict("records") if prices is not None and not prices.empty else []:
+        price_rows.append({key: iso(value) for key, value in row.items() if key in {"timestamp", "open", "high", "low", "close"}})
+
+    serialized_levels = []
+    for index, level in enumerate(levels):
+        serialized_levels.append({
+            "id": f"{str(level.name).lower().replace(' ', '-')}-{index}",
+            "name": level.name,
+            "price": level.price,
+            "value": level.value,
+            "visible": level.visible,
+            "style": level.style,
+            "side": level.side,
+            "open_interest": level.open_interest,
+            "volume": level.volume,
+            "color_key": level.color_key,
+        })
+
+    serialized_bubbles = []
+    for index, bubble in enumerate(bubbles):
+        serialized_bubbles.append({
+            "id": f"{symbol}-{bubble.timestamp.isoformat()}-{bubble.strike}-{index}",
+            "timestamp": iso(bubble.timestamp),
+            "strike": bubble.strike,
+            "option_type": str(bubble.option_type),
+            "size": bubble.size,
+            "premium": bubble.premium,
+            "volume": bubble.volume,
+            "event_count": bubble.event_count,
+            "average_price": bubble.average_price,
+            "expiration": iso(bubble.expiration),
+            "open_interest": bubble.open_interest,
+            "implied_volatility": bubble.implied_volatility,
+            "delta": bubble.delta,
+            "gamma": bubble.gamma,
+            "side": str(bubble.side),
+            "aggressiveness": str(bubble.aggressiveness),
+            "color_state": bubble.color_state,
+            "tooltip": bubble.tooltip,
+        })
+
+    freshness, freshness_age = classify_data_freshness(summary.timestamp, now=datetime.now(ET))
+    regime = metrics.regime_read(summary.net_gex, summary.net_dex)
+    return {
+        "symbol": symbol,
+        "as_of": iso(timestamp),
+        "freshness": freshness.value,
+        "freshness_age_seconds": freshness_age,
+        "current_price": summary.spot,
+        "price_series": price_rows,
+        "previous_price_series": [
+            {key: iso(value) for key, value in row.items() if key in {"timestamp", "open", "high", "low", "close"}}
+            for row in (previous_prices.to_dict("records") if previous_prices is not None and not previous_prices.empty else [])
+        ],
+        "gex_levels": serialized_levels,
+        "flow_bubbles": serialized_bubbles,
+        "market_regime": {
+            "gex_frein": regime["gex_frein"],
+            "dex_sign": regime["dex_sign"],
+            "severity": regime["severity"],
+        },
+        "filters": {
+            "bucket": bucket,
+            "flow_type": flow_type,
+            "flow_side": flow_side,
+            "flow_expiration": flow_expiration,
+            "min_premium": min_premium,
+            "min_volume": min_volume,
+            "window": window,
+            "timeframe": timeframe,
+        },
+        "source": summary.source,
+    }
+
+
+def _react_chart_figure(
+    symbol: str,
+    name: str,
+    *,
+    bucket: str = "Tout",
+    window: float = 0.08,
+    scale: str | None = None,
+    metric: str = "gex",
+    series: list[str] | None = None,
+    profile_expiry: str = "ALL",
+    profile_side: str = "ALL",
+    profile_mode: str = "NET",
+    lang: str = "en",
+):
+    """Build one of the existing Dash figures for the React chart deck.
+
+    React owns layout and interaction around the figure, while the Python
+    dashboard remains the sole owner of the calculations and source data.
+    Imports stay lazy because ``dashboard.main`` mounts this API itself.
+    """
+    from gex.presentation.dashboard import main as dashboard
+
+    symbol = symbol.upper()
+    lang = "es" if lang == "es" else "en"
+    bucket = "Tout" if bucket == "ALL" else bucket
+    window = max(float(window or 0.08), 0.005)
+    scale = (scale or symbol).upper()
+    aliases = {
+        "gex-strike": "gex", "dex-strike": "dex", "gex-history": "history",
+        "spot-zg": "spotzg", "pos-dist-graph": "oi", "oi-change": "oi_change",
+        "pos-hist-graph": "pos_hist", "vol-surface": "vol_surface",
+        "iv-term-structure": "iv_term_structure", "gex-by-expiry": "gex_by_expiry",
+        "oi-by-expiry": "oi_by_expiry", "vex": "vanna", "cex": "charm",
+    }
+    selected_series = [item for item in (series or ["calls", "puts", "net"])
+                       if item in {"calls", "puts", "net"}]
+    if not selected_series:
+        selected_series = ["calls", "puts", "net"]
+    if name == "gflow":
+        return dashboard.gamma_flow_fig(symbol, lang, series=selected_series)
+    if name == "tape":
+        return dashboard.tape_fig(symbol, lang, series=selected_series)
+    if name == "options-flow-overlay":
+        st = dashboard.chain_state(symbol)
+        with dashboard.STATE.lock:
+            chain, snap = st.enriched, st.snapshot
+        if chain is None or snap is None:
+            return dashboard.empty_fig("Esperando la primera cadena de opciones" if lang == "es" else "Waiting for the first option chain", "Options flow overlay")
+        day = datetime.now(ET).strftime("%Y-%m-%d")
+        prices, previous_prices = dashboard.overlay_price_series(symbol, day, "2d")
+        previous_spot = dashboard.store.previous_close_spot(symbol, day=day) or snap.spot
+        level_result = dashboard.metrics.compute_levels(chain, previous_spot, snap.spot, bucket=bucket)
+        gamma_flip = dashboard.metrics.zero_gamma(chain, previous_spot)
+        gex_levels = dashboard.build_gex_levels(chain, snap.spot, gamma_flip, level_result["keys"])
+        bubbles = dashboard.overlay_flow_bubbles(
+            symbol, snap.spot, 0.0, 0.0, "ALL", "ALL", "ALL", window,
+        )
+        xf, _, _ = dashboard._transform_for(symbol, scale)
+        return dashboard.build_options_overlay_from_view_model(
+            dashboard.OptionsOverlayViewModel(
+                symbol=symbol,
+                price_series=prices,
+                previous_price_series=previous_prices,
+                current_price=snap.spot,
+                chain=chain,
+                gamma_flip=gamma_flip,
+                keys=level_result["keys"],
+                day=day,
+                window=window,
+                gex_levels=gex_levels,
+                flow_bubbles=bubbles,
+            ),
+            transform=xf,
+            timeframe="2d",
+        )
+    if name in aliases or name in {"flow", "smile"}:
+        return dashboard._figure_for(
+            symbol, aliases.get(name, name), lang=lang, bucket=bucket,
+            window=window, scale=scale,
+        )
+
+    if name in {"profile", "profile-exp"}:
+        st = dashboard.chain_state(symbol)
+        with dashboard.STATE.lock:
+            df, snap = st.enriched, st.snapshot
+        if df is None or snap is None:
+            return dashboard.empty_fig("Esperando la primera cadena de opciones" if lang == "es" else "Waiting for the first option chain", "Gamma profile")
+        expiry_aliases = {"ALL": "Tout", "WEEKLY": "Semaine", "MONTHLY": "Mois"}
+        selected_expiry = expiry_aliases.get(profile_expiry, profile_expiry)
+        if selected_expiry not in dashboard.EXPIRY_BUCKETS and selected_expiry != "Tout":
+            selected_expiry = "Tout"
+        selected_side = profile_side if profile_side in {"CALLS", "PUTS"} else "ALL"
+        scoped = dashboard._profile_chain_for_display(df, selected_expiry, selected_side)
+        absolute = profile_mode == "ABSOLUTE"
+        width = max(window, 0.06)
+        xf, _, _ = dashboard._transform_for(symbol, scale)
+        if name == "profile":
+            zero_gamma = dashboard.metrics.zero_gamma(scoped, snap.spot) if not absolute else None
+            return dashboard.profile_fig(scoped, snap.spot, zero_gamma, lang, width, xf, absolute=absolute)
+        buckets = tuple(dashboard.EXPIRY_BUCKETS) if selected_expiry == "Tout" else (selected_expiry,)
+        by_expiry = dashboard._profile_chain_for_display(df, "Tout", selected_side)
+        return dashboard.profile_by_expiry_fig(
+            by_expiry, snap.spot, lang, width, xf, buckets=buckets, absolute=absolute,
+        )
+
+    xf, _, _ = dashboard._transform_for(symbol, scale)
+    day = datetime.now(ET).strftime("%Y-%m-%d")
+    if name == "heatmap-intraday":
+        return dashboard.heatmap_intraday_fig(symbol, lang, day, window, xf, scale, None, metric)
+    if name == "heatmap-bubbles":
+        return dashboard.heatmap_bubbles_fig(symbol, lang, day, window, xf, scale, None, metric)
+    if name == "heatmap-term":
+        return dashboard.heatmap_term_fig(symbol, lang, day, window, xf, scale, None, metric)
+    if name == "heatmap-hist":
+        return dashboard.heatmap_history_fig(symbol, lang, xf)
+    if name == "heatmap-overlay":
+        return dashboard.heatmap_fig(symbol, lang, day, window, xf, scale)
+    if name in {"overview-market-map", "market-map-chart"}:
+        return dashboard._market_map_figure_for_display(
+            symbol, bucket, map_window=3.0, neutral_gex=0.0,
+            scenario_limit=5, value_area=0.70, visible_sources=None,
+            wall_min_strength=0,
+        )
+    if name == "unified-level-map":
+        snapshot = _market_intelligence(symbol, bucket)
+        levels = snapshot.report.key_levels if snapshot is not None else ()
+        return dashboard.build_level_map_figure(snapshot, levels)
+    if name == "level-history-chart":
+        return dashboard.build_level_history_figure(
+            _market_level_history_payload(symbol, bucket=bucket), level_types=None,
+        )
+    return None
+
+
+def _react_chart_payload(symbol: str, names: list[str], **options) -> dict[str, object]:
+    """Serialize a bounded chart suite for React without changing chart math."""
+    charts: dict[str, object] = {}
+    errors: dict[str, str] = {}
+    for name in names:
+        try:
+            figure = _react_chart_figure(symbol, name, **options)
+            charts[name] = json.loads(figure.to_json()) if figure is not None else None
+        except Exception as exc:  # one unavailable secondary chart must not blank the deck
+            charts[name] = None
+            errors[name] = str(exc)
+    payload: dict[str, object] = {"symbol": symbol.upper(), "charts": charts}
+    if errors:
+        payload["errors"] = errors
+    return payload
+
+
+def _price_history_payload(symbol: str, sessions: int = 5, interval: str = "5m") -> dict[str, object]:
+    """Return stored OHLC bars across recent sessions, without synthetic values."""
+    from gex.adapters.persistence import store
+
+    symbol = symbol.upper()
+    interval = interval if interval in {"1m", "5m", "15m"} else "5m"
+    sessions = max(1, min(int(sessions or 5), 10))
+    source_symbol = symbol
+    days = store.price_days(source_symbol)
+    if not days and symbol in {"ES", "NQ"}:
+        source_symbol = {"ES": "SPX", "NQ": "NDX"}[symbol]
+        days = store.price_days(source_symbol)
+    selected_days = days[-sessions:]
+    frames: list[pd.DataFrame] = []
+    usable_days: list[str] = []
+    for day in selected_days:
+        frame = store.load_prices(source_symbol, day)
+        if frame is None or frame.empty:
+            continue
+        required = {"timestamp", "open", "high", "low", "close"}
+        if not required.issubset(frame.columns):
+            continue
+        clean = frame[list(required | ({"volume"} if "volume" in frame.columns else set()))].copy()
+        clean["timestamp"] = pd.to_datetime(clean["timestamp"], errors="coerce")
+        for column in ("open", "high", "low", "close", "volume"):
+            if column in clean:
+                clean[column] = pd.to_numeric(clean[column], errors="coerce")
+        clean = clean.dropna(subset=["timestamp", "open", "high", "low", "close"])
+        if not clean.empty:
+            frames.append(clean)
+            usable_days.append(day)
+    if not frames:
+        return {
+            "symbol": symbol,
+            "source_symbol": source_symbol,
+            "requested_sessions": sessions,
+            "available_sessions": 0,
+            "sessions": [],
+            "interval": interval,
+            "rows": [],
+            "source": "stored OHLC",
+        }
+
+    bars = pd.concat(frames, ignore_index=True).sort_values("timestamp")
+    rule = {"1m": "1min", "5m": "5min", "15m": "15min"}[interval]
+    aggregations = {"open": "first", "high": "max", "low": "min", "close": "last"}
+    if "volume" in bars:
+        aggregations["volume"] = "sum"
+    bars = (
+        bars.set_index("timestamp")
+        .groupby(lambda value: value.date())
+        .resample(rule, origin="start_day")
+        .agg(aggregations)
+        .dropna(subset=["open", "high", "low", "close"])
+        .reset_index(level=0, drop=True)
+        .reset_index()
+        .sort_values("timestamp")
+    )
+    rows = []
+    for row in bars.to_dict(orient="records"):
+        timestamp = pd.Timestamp(row["timestamp"])
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.tz_localize(ET)
+        row["timestamp"] = timestamp.isoformat()
+        rows.append({key: value for key, value in row.items() if pd.notna(value)})
+    return {
+        "symbol": symbol,
+        "source_symbol": source_symbol,
+        "requested_sessions": sessions,
+        "available_sessions": len(usable_days),
+        "sessions": usable_days,
+        "interval": interval,
+        "rows": rows,
+        "source": "stored OHLC",
+    }
+
+
+def _liquidity_heatmap_payload(symbol: str, window: float, metric: str, lang: str = "en") -> dict[str, object]:
+    """Flatten the existing Dash option/GEX heatmap for the native canvas."""
+    from gex.presentation.dashboard import main as dashboard
+
+    symbol = symbol.upper()
+    lang = "es" if lang == "es" else "en"
+    metric = metric if metric in {"gex", "oi", "vol"} else "gex"
+    day = datetime.now(ET).strftime("%Y-%m-%d")
+    xf, _, _ = dashboard._transform_for(symbol, symbol)
+    figure = dashboard.heatmap_intraday_fig(symbol, lang, day, max(float(window or 0.08), 0.005), xf, symbol, None, metric)
+    trace_object = next((item for item in figure.data if item.type == "heatmap"), None)
+    if trace_object is None:
+        return {"symbol": symbol, "metric": metric, "rows": 0, "cols": 0, "matrix": [], "source": "stored option snapshots"}
+    z_values = trace_object.z.tolist() if hasattr(trace_object.z, "tolist") else list(trace_object.z or [])
+    y_values = trace_object.y.tolist() if hasattr(trace_object.y, "tolist") else list(trace_object.y or [])
+    x_values = list(trace_object.x or [])
+    matrix = [[float(value or 0.0) for value in row] for row in z_values]
+    y_values = [float(value) for value in y_values if value is not None]
+    if not matrix or not matrix[0] or not y_values or not x_values:
+        return {"symbol": symbol, "metric": metric, "rows": 0, "cols": 0, "matrix": [], "source": "stored option snapshots"}
+    timestamps = []
+    for value in x_values:
+        text_value = str(value)
+        timestamp = pd.Timestamp(f"{day}T{text_value}:00", tz=ET) if len(text_value) == 5 else pd.Timestamp(value)
+        timestamps.append(int(timestamp.timestamp()))
+    return {
+        "symbol": symbol,
+        "metric": metric,
+        "rows": len(matrix),
+        "cols": len(matrix[0]),
+        "matrix": [value for row in matrix for value in row],
+        "price_min": min(y_values),
+        "price_max": max(y_values),
+        "time_start": min(timestamps),
+        "time_end": max(timestamps) if len(timestamps) > 1 else timestamps[0] + 300,
+        "source": "stored option snapshots",
+        "as_of": datetime.now(ET).isoformat(),
+    }
+
+
 def register_api(app) -> None:
     """`app` : l'instance Dash (on grimpe à `.server`) ou directement une
     instance Flask — pratique pour les tests, qui n'ont pas besoin de monter
     tout le dashboard."""
     server: Flask = app.server if hasattr(app, "server") else app
+    react_dist = (Path(__file__).resolve().parents[2] / ".." / "frontend" / "dist").resolve()
+
+    @server.route("/terminal", defaults={"resource": ""})
+    @server.route("/terminal/", defaults={"resource": ""})
+    @server.route("/terminal/<path:resource>")
+    def _react_terminal(resource):
+        """Serve the compiled React terminal when a frontend build exists."""
+        if request.path == "/terminal":
+            query = request.query_string.decode("utf-8")
+            return redirect(f"/terminal/?{query}" if query else "/terminal/", code=308)
+        # A public `/terminal/` base must never be applied twice. This also
+        # repairs bookmarks created while the first React shell used absolute
+        # `/terminal/...` links inside a router with the same basename.
+        if resource == "terminal" or resource.startswith("terminal/"):
+            suffix = resource[len("terminal"):].lstrip("/")
+            target = f"/terminal/{suffix}" if suffix else "/terminal/"
+            query = request.query_string.decode("utf-8")
+            return redirect(f"{target}?{query}" if query else target, code=308)
+        index = react_dist / "index.html"
+        if not index.exists():
+            return jsonify({
+                "error": "React terminal not built",
+                "command": "cd frontend && npm run build",
+            }), 404
+        requested = (react_dist / resource).resolve() if resource else index
+        if requested.is_file() and react_dist in requested.parents:
+            return send_from_directory(react_dist, resource or "index.html")
+        return send_from_directory(react_dist, "index.html")
 
     @server.after_request
     def _cors(resp):
@@ -697,17 +1181,18 @@ def register_api(app) -> None:
         snapshot = _market_intelligence(symbol, request.args.get("bucket", "0DTE"))
         if snapshot is None:
             return jsonify({"error": "indisponible (pas encore de premier pull)"}), 404
-        return jsonify(market_state_to_dict(snapshot.state))
+        return jsonify(market_state_to_dict(snapshot.state, lang=request.args.get("lang", "en")))
 
     @server.route("/api/v1/<symbol>/market/scenarios")
     def _market_scenarios(symbol):
         snapshot = _market_intelligence(symbol, request.args.get("bucket", "0DTE"))
         if snapshot is None:
             return jsonify({"error": "indisponible (pas encore de premier pull)"}), 404
+        lang = request.args.get("lang", "en")
         return jsonify({
             "symbol": snapshot.state.symbol,
             "timestamp": snapshot.state.timestamp.isoformat(),
-            "scenarios": [scenario_to_dict(scenario) for scenario in snapshot.scenarios],
+            "scenarios": [scenario_to_dict(scenario, lang=lang) for scenario in snapshot.scenarios],
         })
 
     @server.route("/api/v1/<symbol>/market/alerts")
@@ -726,13 +1211,63 @@ def register_api(app) -> None:
         snapshot = _market_intelligence(symbol, request.args.get("bucket", "0DTE"))
         if snapshot is None:
             return jsonify({"error": "indisponible (pas encore de premier pull)"}), 404
-        return jsonify(market_report_to_dict(snapshot.report))
+        return jsonify(market_report_to_dict(snapshot.report, lang=request.args.get("lang", "en")))
 
     @server.route("/api/v1/<symbol>/market/map")
     def _market_map(symbol):
         payload = _market_map_payload(symbol, request.args.get("bucket", "0DTE"))
         if payload is None:
             return jsonify({"error": "indisponible (pas encore de premier pull)"}), 404
+        return jsonify(payload)
+
+    @server.route("/api/v1/<symbol>/market/overlay")
+    def _market_overlay(symbol):
+        """Serve the React price/GEX/options-flow overlay view model."""
+        try:
+            payload = _market_overlay_payload(
+                symbol,
+                bucket=request.args.get("bucket", "0DTE"),
+                flow_type=request.args.get("flow_type", "ALL"),
+                flow_side=request.args.get("flow_side", "ALL"),
+                flow_expiration=request.args.get("flow_expiration", "ALL"),
+                min_premium=float(request.args.get("min_premium", "0")),
+                min_volume=float(request.args.get("min_volume", "0")),
+                window=float(request.args.get("window", "0.03")),
+                timeframe=request.args.get("timeframe", "2d"),
+            )
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        if payload is None:
+            return jsonify({"error": "indisponible (pas encore de premier pull)"}), 404
+        return jsonify(payload)
+
+    @server.route("/api/v1/<symbol>/market/charts")
+    def _market_charts(symbol):
+        """Expose the existing Dash chart catalog as lazy React figures."""
+        names = [name.strip() for name in request.args.get("names", "").split(",") if name.strip()]
+        unknown = [name for name in names if name not in REACT_CHART_NAMES]
+        if unknown:
+            return jsonify({"error": f"chart names not allowed: {', '.join(unknown)}"}), 400
+        if not names:
+            return jsonify({"error": "at least one chart name is required"}), 400
+        try:
+            window = float(request.args.get("window", "0.08"))
+        except ValueError:
+            return jsonify({"error": "window must be numeric"}), 400
+        series = [value for value in request.args.get("series", "calls,puts,net").split(",") if value]
+        payload = _react_chart_payload(
+            symbol,
+            names[:16],
+            bucket=request.args.get("bucket", "Tout"),
+            window=window,
+            scale=request.args.get("scale"),
+            metric=request.args.get("metric", "gex"),
+            series=series,
+            profile_expiry=request.args.get("profile_expiry", "ALL"),
+            profile_side=request.args.get("profile_side", "ALL"),
+            profile_mode=request.args.get("profile_mode", "NET"),
+            lang=request.args.get("lang", "en"),
+        )
         return jsonify(payload)
 
     @server.route("/api/v1/<symbol>/options/chain")
@@ -759,6 +1294,24 @@ def register_api(app) -> None:
             return jsonify({"error": str(exc)}), 400
         if payload is None:
             return jsonify({"error": "indisponible (pas encore de premier pull)"}), 404
+        return jsonify(payload)
+
+    @server.route("/api/v1/<symbol>/market/expiry-map")
+    def _market_expiry_map(symbol):
+        metric = request.args.get("metric", "gex")
+        try:
+            expiries = int(request.args.get("expiries", "10"))
+            strikes_each_side = int(request.args.get("strikes", "10"))
+            payload = _expiry_exposure_map_payload(
+                symbol,
+                metric=metric,
+                expiries=expiries,
+                strikes_each_side=strikes_each_side,
+            )
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        if payload is None:
+            return jsonify({"error": "No valid options chain available"}), 404
         return jsonify(payload)
 
     @server.route("/api/v1/<symbol>/market/levels/history")
@@ -795,6 +1348,59 @@ def register_api(app) -> None:
         payload = _market_session_payload(symbol, day)
         if payload is None:
             return jsonify({"error": "indisponible (pas encore de premier pull)"}), 404
+        return jsonify(payload)
+
+    @server.route("/api/v1/<symbol>/market/prices")
+    def _market_prices(symbol):
+        """Serve stored OHLC bars for the React terminal without recalculation."""
+        from gex.adapters.persistence import store
+
+        symbol = symbol.upper()
+        days = store.price_days(symbol)
+        requested_day = request.args.get("date")
+        day = requested_day if requested_day in days else (days[-1] if days else None)
+        if day is None:
+            return jsonify({"symbol": symbol, "date": None, "rows": []})
+        frame = store.load_prices(symbol, day)
+        if frame is None or frame.empty:
+            return jsonify({"symbol": symbol, "date": day, "rows": []})
+        rows = frame.copy()
+        rows["timestamp"] = pd.to_datetime(rows["timestamp"]).map(lambda value: value.isoformat())
+        columns = [column for column in ("timestamp", "open", "high", "low", "close") if column in rows]
+        return jsonify({
+            "symbol": symbol,
+            "date": day,
+            "rows": rows[columns].to_dict(orient="records"),
+        })
+
+    @server.route("/api/v1/<symbol>/market/prices/history")
+    def _market_prices_history(symbol):
+        try:
+            sessions = int(request.args.get("days", "5"))
+        except ValueError:
+            return jsonify({"error": "days must be an integer"}), 400
+        interval = request.args.get("interval", "5m")
+        if interval not in {"1m", "5m", "15m"}:
+            return jsonify({"error": "interval must be 1m, 5m or 15m"}), 400
+        return jsonify(_price_history_payload(symbol, sessions=sessions, interval=interval))
+
+    @server.route("/api/v1/<symbol>/market/liquidity-heatmap")
+    def _market_liquidity_heatmap(symbol):
+        try:
+            window = float(request.args.get("window", "0.08"))
+            if window <= 0:
+                raise ValueError
+        except ValueError:
+            return jsonify({"error": "window must be a positive number"}), 400
+        try:
+            payload = _liquidity_heatmap_payload(
+                symbol,
+                window=window,
+                metric=request.args.get("metric", "gex"),
+                lang=request.args.get("lang", "en"),
+            )
+        except (TypeError, ValueError) as exc:
+            return jsonify({"error": str(exc)}), 400
         return jsonify(payload)
 
     @server.route("/api/v1/<symbol>/strikes")

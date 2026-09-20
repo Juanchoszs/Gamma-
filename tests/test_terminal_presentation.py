@@ -68,7 +68,7 @@ def test_terminal_level_visibility_and_accent_are_presentation_only_preferences(
     filtered = intelligence_view(snapshot, levels=())
 
     assert "No unified levels" in str(filtered[1])
-    assert terminal_accent_style("teal")["--color-info"] == "#2aa198"
+    assert terminal_accent_style("teal")["--color-info"] == "#58b6c4"
     assert terminal_accent_style("unknown") == terminal_accent_style("blue")
 
 

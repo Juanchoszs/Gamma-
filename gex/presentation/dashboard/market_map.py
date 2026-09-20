@@ -7,6 +7,21 @@ from gex.presentation.dashboard.chart_theme import INSTITUTIONAL_THEME
 
 
 _COLORS = INSTITUTIONAL_THEME.colors
+_DECISION_LEVEL_TYPES = ("CALL_WALL", "PUT_WALL", "GAMMA_FLIP")
+_ANNOTATION_SHIFT = {"CALL_WALL": 14, "GAMMA_FLIP": -14, "PUT_WALL": 0}
+
+
+def _decision_levels(levels: list[dict]) -> list[dict]:
+    """Keep the price map readable by labeling only its three decision anchors."""
+    selected = []
+    for level_type in _DECISION_LEVEL_TYPES:
+        candidates = [
+            level for level in levels
+            if level.get("type") == level_type and level.get("price") is not None
+        ]
+        if candidates:
+            selected.append(max(candidates, key=lambda level: int(level.get("strength", 0) or 0)))
+    return selected
 
 
 def build_market_map_figure(payload: dict | None) -> go.Figure:
@@ -40,15 +55,17 @@ def build_market_map_figure(payload: dict | None) -> go.Figure:
     spot = float(payload["spot"])
     fig.add_hline(y=spot, line={"color": _COLORS.spot, "width": 2}, annotation_text="SPOT",
                   annotation_font={"color": _COLORS.spot, "size": 10}, annotation_position="top left")
-    for level in payload.get("levels", [])[:16]:
+    for level in _decision_levels(payload.get("levels", [])):
         price = level.get("price")
         if price is None:
             continue
+        level_type = str(level.get("type", "LEVEL"))
         fig.add_hline(
-            y=float(price), line={"color": _level_color(str(level.get("type", ""))), "width": 1, "dash": "dot"},
-            annotation_text=f"{level.get('type', 'LEVEL').replace('_', ' ')} {int(level.get('strength', 0))}/100",
-            annotation_font={"color": _level_color(str(level.get("type", ""))), "size": 9},
+            y=float(price), line={"color": _level_color(level_type), "width": 1, "dash": "dot"},
+            annotation_text=level_type.replace("_", " "),
+            annotation_font={"color": _level_color(level_type), "size": 9},
             annotation_position="top right",
+            annotation_yshift=_ANNOTATION_SHIFT.get(level_type, 0),
         )
     fig.update_layout(
         title={"text": f"{payload.get('symbol', 'Market')} exposure by strike", "x": 0.01,

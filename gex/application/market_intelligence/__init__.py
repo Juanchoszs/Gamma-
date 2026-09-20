@@ -10,8 +10,10 @@ from gex.application.market_intelligence.levels import (
     build_market_levels_from_gex_outputs,
 )
 from gex.application.market_intelligence.options_chain import (
+    ExpiryExposureMapConfig,
     OptionsChainConfig,
     available_expirations,
+    build_expiry_exposure_map_payload,
     build_options_chain_payload,
 )
 from gex.application.market_intelligence.level_history import (
@@ -64,12 +66,14 @@ __all__ = [
     "LevelBuildConfig",
     "MarketMapConfig",
     "OptionsChainConfig",
+    "ExpiryExposureMapConfig",
     "LevelHistoryObservation",
     "SessionProfileConfig",
     "build_market_levels_from_gex_outputs",
     "build_market_map_payload",
     "available_expirations",
     "build_options_chain_payload",
+    "build_expiry_exposure_map_payload",
     "build_level_history_payload",
     "build_level_inspector_payload",
     "build_session_levels_from_profile",

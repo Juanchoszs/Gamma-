@@ -25,6 +25,7 @@ Sécurité de l'échange :
 from __future__ import annotations
 
 import logging
+import os
 import secrets
 import threading
 
@@ -42,6 +43,24 @@ log = logging.getLogger(__name__)
 _PENDING: dict[str, float] = {}
 _PENDING_LOCK = threading.Lock()
 _MAX_PENDING = 8
+
+
+def shared_deployment_enabled() -> bool:
+    """Whether the instance uses server-managed broker credentials.
+
+    A public terminal must never let a visitor overwrite, clear, or authorize
+    the credentials that power its shared market-data connection.
+    """
+    return os.getenv("GEX_SHARED_DEPLOYMENT", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _managed_credentials_response():
+    from flask import jsonify
+
+    return jsonify({
+        "ok": False,
+        "error": "This shared deployment uses server-managed market-data credentials.",
+    }), 403
 
 
 def _page(titre: str, message: str, ok: bool) -> str:
@@ -130,6 +149,8 @@ def register_oauth(app) -> None:
 
     @server.route("/api/v1/tastytrade/save", methods=["POST"])
     def _api_save():
+        if shared_deployment_enabled():
+            return _managed_credentials_response()
         data = request.get_json(silent=True) or request.form
         cid = (data.get("client_id") or "").strip()
         secret = (data.get("client_secret") or "").strip()
@@ -147,12 +168,16 @@ def register_oauth(app) -> None:
 
     @server.route("/api/v1/tastytrade/disconnect", methods=["POST"])
     def _api_disconnect():
+        if shared_deployment_enabled():
+            return _managed_credentials_response()
         tt_auth.clear_credentials()
         etat, msg = connection_status()
         return jsonify({"ok": True, "status": etat, "message": msg})
 
     @server.route("/api/v1/tastytrade/exchange", methods=["POST"])
     def _api_exchange():
+        if shared_deployment_enabled():
+            return _managed_credentials_response()
         data = request.get_json(silent=True) or request.form
         cid = (data.get("client_id") or "").strip()
         secret = (data.get("client_secret") or "").strip()
@@ -175,6 +200,8 @@ def register_oauth(app) -> None:
 
     @server.route("/oauth/start")
     def _oauth_start():
+        if shared_deployment_enabled():
+            return _managed_credentials_response()
         from gex.adapters.market_data.rtquote import _env
 
         # Permet aussi de passer client_id et client_secret directement en paramètres
@@ -194,6 +221,8 @@ def register_oauth(app) -> None:
 
     @server.route("/oauth/callback")
     def _oauth_callback():
+        if shared_deployment_enabled():
+            return _managed_credentials_response()
         erreur = request.args.get("error")
         if erreur:
             return _page("Autorización rechazada",

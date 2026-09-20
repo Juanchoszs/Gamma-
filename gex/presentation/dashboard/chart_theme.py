@@ -15,14 +15,14 @@ class ChartColors:
     
     # Primary data series
     spot: str = "#f4f7fb"
-    call: str = "#2dd4bf"
-    put: str = "#f05c7c"
+    call: str = "#58b6c4"
+    put: str = "#d98795"
     net: str = "#a8b3c2"
     
     # Key levels
-    call_wall: str = "#22d3ee"
-    put_wall: str = "#f05c7c"
-    gamma_flip: str = "#f6c85f"
+    call_wall: str = "#58b6c4"
+    put_wall: str = "#d98795"
+    gamma_flip: str = "#d8b65a"
     hvl: str = "#a78bfa"
     session_regular: str = "#5e9cf3"
     session_overnight: str = "#c084fc"
@@ -40,17 +40,17 @@ class ChartColors:
     text_muted: str = "#748295"
     
     # Semantic states
-    positive: str = "#2dd4bf"
-    negative: str = "#f05c7c"
-    warning: str = "#f6c85f"
-    info: str = "#22d3ee"
-    success: str = "#34d399"
+    positive: str = "#6b93e5"
+    negative: str = "#d98795"
+    warning: str = "#d8b65a"
+    info: str = "#58b6c4"
+    success: str = "#6b93e5"
     
     # Heatmap professional palette (replaces neon)
     heatmap_low: str = "#25122f"
     heatmap_medium: str = "#762557"
     heatmap_high: str = "#0f718a"
-    heatmap_very_high: str = "#45d6d0"
+    heatmap_very_high: str = "#58b6c4"
     
     def to_dict(self) -> Dict[str, str]:
         """Convertir a diccionario para uso con Plotly."""

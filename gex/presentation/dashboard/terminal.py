@@ -41,9 +41,9 @@ _NAV_SHORT = {
 }
 
 _ACCENT_TOKENS = {
-    "blue": {"--color-info": "#22d3ee", "--color-info-rgb": "34, 211, 238", "--color-border-focus": "#22d3ee"},
-    "teal": {"--color-info": "#2dd4bf", "--color-info-rgb": "45, 212, 191", "--color-border-focus": "#2dd4bf"},
-    "gold": {"--color-info": "#f6c85f", "--color-info-rgb": "246, 200, 95", "--color-border-focus": "#f6c85f"},
+    "blue": {"--color-info": "#7aa6d8", "--color-info-rgb": "122, 166, 216", "--color-border-focus": "#7aa6d8"},
+    "teal": {"--color-info": "#58b6c4", "--color-info-rgb": "88, 182, 196", "--color-border-focus": "#58b6c4"},
+    "gold": {"--color-info": "#d8b65a", "--color-info-rgb": "216, 182, 90", "--color-border-focus": "#d8b65a"},
 }
 _MARKET_TIMEZONE = ZoneInfo("America/New_York")
 

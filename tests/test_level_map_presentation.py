@@ -21,6 +21,7 @@ def test_level_map_uses_normalized_levels_and_spot():
     assert len(figure.data) == 1
     assert figure.data[0].x[0] == 80
     assert figure.data[0].y[0] == 100.0
+    assert figure.data[0].mode == "markers"
     assert figure.layout.xaxis.showspikes is True
     assert figure.layout.yaxis.showspikes is True
 

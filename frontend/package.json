@@ -1,0 +1,35 @@
+{
+  "name": "gamma-terminal-react",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "test": "vitest run",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@tailwindcss/vite": "latest",
+    "@tanstack/react-query": "^5.103.1",
+    "lightweight-charts": "^5.2.1",
+    "lucide-react": "latest",
+    "plotly.js-cartesian-dist-min": "^4.1.1",
+    "react": "latest",
+    "react-dom": "latest",
+    "react-plotly.js": "^4.1.0",
+    "react-router-dom": "^7.18.4",
+    "tailwindcss": "latest",
+    "vite": "latest"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.7",
+    "@vitejs/plugin-react": "latest",
+    "jsdom": "^29.1.1",
+    "vitest": "^5.0.1"
+  }
+}

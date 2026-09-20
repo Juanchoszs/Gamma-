@@ -42,12 +42,106 @@ class OptionsChainConfig:
             raise ValueError("options-chain thresholds must be non-negative")
 
 
+@dataclass(frozen=True)
+class ExpiryExposureMapConfig:
+    """Bound the real strike x expiry matrix sent to the terminal."""
+
+    metric: str = "gex"
+    expiries: int = 10
+    strikes_each_side: int = 10
+
+    def __post_init__(self) -> None:
+        if self.metric not in {"gex", "oi"}:
+            raise ValueError("metric must be gex or oi")
+        if not 1 <= self.expiries <= 24:
+            raise ValueError("expiries must be between 1 and 24")
+        if not 1 <= self.strikes_each_side <= 40:
+            raise ValueError("strikes_each_side must be between 1 and 40")
+
+
 def available_expirations(chain: pd.DataFrame | None) -> list[str]:
     """Return normalized sorted expirations available in an enriched chain."""
     if chain is None or chain.empty or "expiry" not in chain:
         return []
     values = pd.to_datetime(chain["expiry"], errors="coerce").dropna()
     return sorted({value.date().isoformat() for value in values})
+
+
+def build_expiry_exposure_map_payload(
+    *,
+    chain: pd.DataFrame | None,
+    spot: float,
+    config: ExpiryExposureMapConfig | None = None,
+) -> dict[str, Any]:
+    """Aggregate existing contract GEX or OI into a bounded strike x expiry grid."""
+    if spot <= 0:
+        raise ValueError("spot must be positive")
+    cfg = config or ExpiryExposureMapConfig()
+    metric_column = "gex" if cfg.metric == "gex" else "open_interest"
+    raw = chain if chain is not None else pd.DataFrame()
+    required = {"strike", "expiry", metric_column}
+    if raw.empty or not required.issubset(raw.columns):
+        return _empty_expiry_exposure_map(spot, cfg)
+
+    rows = raw[["strike", "expiry", metric_column]].copy()
+    rows["strike"] = pd.to_numeric(rows["strike"], errors="coerce")
+    rows[metric_column] = pd.to_numeric(rows[metric_column], errors="coerce")
+    expiry = pd.to_datetime(rows["expiry"], errors="coerce")
+    rows["expiry"] = expiry.dt.date.astype(str)
+    rows = rows[rows["strike"].gt(0) & expiry.notna() & rows[metric_column].notna()]
+    if rows.empty:
+        return _empty_expiry_exposure_map(spot, cfg)
+
+    available = sorted(rows["expiry"].unique().tolist())
+    expiries = available[:cfg.expiries]
+    rows = rows[rows["expiry"].isin(expiries)]
+    strikes = _strikes_around_spot(rows["strike"], spot, cfg.strikes_each_side)
+    rows = rows[rows["strike"].isin(strikes)]
+    matrix = rows.pivot_table(
+        index="strike", columns="expiry", values=metric_column,
+        aggfunc="sum", fill_value=0.0,
+    ).reindex(index=strikes, columns=expiries, fill_value=0.0)
+    nearest_strike = min(strikes, key=lambda value: (abs(value - spot), value)) if strikes else None
+    return {
+        "spot": float(spot),
+        "metric": cfg.metric,
+        "available_expirations": available,
+        "expirations": expiries,
+        "strikes_each_side": cfg.strikes_each_side,
+        "nearest_strike": nearest_strike,
+        "expiry_totals": [float(matrix[expiry].sum()) for expiry in expiries],
+        "rows": [
+            {
+                "strike": float(strike),
+                "is_atm": bool(strike == nearest_strike),
+                "values": [float(matrix.at[strike, expiry]) for expiry in expiries],
+            }
+            for strike in sorted(strikes, reverse=True)
+        ],
+    }
+
+
+def _empty_expiry_exposure_map(spot: float, config: ExpiryExposureMapConfig) -> dict[str, Any]:
+    return {
+        "spot": float(spot),
+        "metric": config.metric,
+        "available_expirations": [],
+        "expirations": [],
+        "strikes_each_side": config.strikes_each_side,
+        "nearest_strike": None,
+        "expiry_totals": [],
+        "rows": [],
+    }
+
+
+def _strikes_around_spot(values: pd.Series, spot: float, count: int) -> list[float]:
+    strikes = sorted({float(value) for value in values if np.isfinite(value) and value > 0})
+    if not strikes:
+        return []
+    atm = min(strikes, key=lambda value: (abs(value - spot), value))
+    below = sorted((strike for strike in strikes if strike < atm), reverse=True)[:count]
+    above = sorted(strike for strike in strikes if strike > atm)[:count]
+    return sorted(set(below + [atm] + above))
 
 
 def build_options_chain_payload(
